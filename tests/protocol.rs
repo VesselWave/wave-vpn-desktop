@@ -60,10 +60,7 @@ fn rsa_session_and_aes_payload_interoperate_with_reference_wire_format() {
 
 #[test]
 fn parses_the_pinned_official_eddie_manifest() {
-    let m = parse_manifest(include_str!(
-        "../protocol-data/fixtures/eddie-manifest.xml"
-    ))
-    .unwrap();
+    let m = parse_manifest(include_str!("../protocol-data/fixtures/eddie-manifest.xml")).unwrap();
     assert!(m.servers.len() > 10);
     assert!(m
         .modes

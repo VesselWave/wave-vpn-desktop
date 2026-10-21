@@ -1,7 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Independently written against pinned Eddie references; see docs/PROVENANCE.md.
+pub mod credentials;
+pub mod diagnostics;
 mod documents;
+pub mod eddie;
 mod envelope;
+pub mod firewall;
+pub mod options;
+pub mod process;
+pub mod service;
 pub mod transport;
 
 use anyhow::{bail, Context, Result};
@@ -38,12 +45,15 @@ impl Bootstrap {
 pub struct Client(reqwest::blocking::Client);
 impl Client {
     pub fn new() -> Result<Self> {
+        Self::with_timeout(10)
+    }
+    pub fn with_timeout(seconds: u64) -> Result<Self> {
         Ok(Self(
             reqwest::blocking::Client::builder()
                 .redirect(reqwest::redirect::Policy::none())
                 .no_proxy()
-                .connect_timeout(Duration::from_secs(8))
-                .timeout(Duration::from_secs(12))
+                .connect_timeout(Duration::from_secs(seconds.clamp(1, 3600)))
+                .timeout(Duration::from_secs(seconds.clamp(1, 3600)))
                 .build()?,
         ))
     }

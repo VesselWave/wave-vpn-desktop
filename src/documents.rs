@@ -258,6 +258,62 @@ impl Account {
     }
 }
 impl TunnelProfile {
+    pub fn apply_options(&mut self, options: &crate::options::Options) -> Result<()> {
+        options.validate()?;
+        self.addresses.retain(|a| {
+            if a.contains(':') {
+                options.get("ipv6") != "block"
+            } else {
+                options.get("ipv4") != "block"
+            }
+        });
+        if !options.get("dns").is_empty() {
+            self.dns = options
+                .get("dns")
+                .split(',')
+                .map(|s| s.trim().to_owned())
+                .collect();
+        }
+        self.dns.retain(|a| {
+            if a.contains(':') {
+                options.get("ipv6") != "block"
+            } else {
+                options.get("ipv4") != "block"
+            }
+        });
+        ensure!(
+            !self.addresses.is_empty() && !self.dns.is_empty(),
+            "Selected IP modes leave no tunnel address or DNS server"
+        );
+        ensure!(
+            options.get("ipv6") != "in" || self.addresses.iter().any(|a| a.contains(':')),
+            "IPv6 mode requires an IPv6 tunnel address; use in-block for an IPv4-only device"
+        );
+        Ok(())
+    }
+    pub fn config_with(&self, options: &crate::options::Options) -> Result<String> {
+        options.validate()?;
+        let mut config = self
+            .config()?
+            .replace("MTU = 1320", &format!("MTU = {}", options.number("mtu")))
+            .replace(
+                "PersistentKeepalive = 15",
+                &format!("PersistentKeepalive = {}", options.number("keepalive")),
+            );
+        let allowed = match (
+            options.get("ipv4") == "block",
+            options.get("ipv6") == "block" || !self.addresses.iter().any(|a| a.contains(':')),
+        ) {
+            (true, false) => "::/0",
+            (false, true) => "0.0.0.0/0",
+            _ => "0.0.0.0/0, ::/0",
+        };
+        config = config.replace(
+            "AllowedIPs = 0.0.0.0/0, ::/0",
+            &format!("AllowedIPs = {allowed}"),
+        );
+        Ok(config)
+    }
     pub fn config(&self) -> Result<String> {
         for key in [&self.private_key, &self.preshared_key, &self.public_key] {
             ensure!(STANDARD.decode(key)?.len() == 32, "Invalid WireGuard key");

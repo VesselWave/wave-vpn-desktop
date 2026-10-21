@@ -56,14 +56,28 @@ The absence of a license on the archived upstream desktop project is the reason 
 tests, helper, packaging and inherited GUI application code are excluded.
 Neither old repository history nor a dependency on it is included in this tree.
 
-## Linux transport reference
+## Linux transport references
 
-Linux connections invoke official Hummingbird instead of the archived helper.
-Arguments and shutdown behavior were checked against
-[AirVPN Suite](https://gitlab.com/AirVPN/AirVPN-Suite), commit
-`35fe8af098db7e907207aa5ab6ad38219286c9cf`, `README-hummingbird.md` and
-`src/hummingbird.cpp`. Hummingbird is a separate installed dependency; no Suite
-source is bundled. It manages routing, DNS, WireGuard and Network Lock.
+The fresh Linux backend uses the distribution's `wg`, `ip` and `nft` tools;
+it does not require Hummingbird or `wg-quick`. The shared protocol and transport
+request API have no dependency on these tools. Platform effects are confined to
+`src/platform/linux.rs`; no macOS/Windows VPN backend is implemented yet.
+
+Behavior was checked against the pinned Eddie sources above:
+`Lib.Core/ConnectionTypes/WireGuard.cs`, `Lib.Platform.Linux/Platform.cs`,
+`Lib.Platform.Linux/NetworkLockNftables.cs`, and
+`App.CLI.Linux.Elevated/src/impl.cpp`. Eddie itself uses kernel UAPI on Linux;
+Wave currently invokes `wg` instead. No source text was copied from those files.
+
+Policy routing and fwmark behavior were also checked against upstream
+[wireguard-tools wg-quick](https://git.zx2c4.com/wireguard-tools/tree/src/wg-quick/linux.bash),
+blob `18e266c952b466e8797c73fd1aa4f2187f7ec658`, and
+[wg(8)](https://git.zx2c4.com/wireguard-tools/tree/src/man/wg.8),
+blob `a0fc04c04cf19d64740d1da8edf4055d40cce253`.
+These are behavioral references; their GPL-2.0-only source is not copied or bundled.
+
+Linux tray uses the public ksni StatusNotifier API, with new menu/state wiring.
+All new controllers, policies, views and tests are independent implementations.
 
 [AirVPN's third-party forum](https://airvpn.org/forums/forum/49-third-party-software/)
 provides community integration context, not a protocol specification or a license
@@ -74,3 +88,29 @@ grant for projects linked there.
 This app has its own Git history and remote. Protocol reference data and fixtures
 are included locally under `protocol-data/`; no sibling checkout is required.
 The parent workspace's community checklist coordinates both applications.
+
+## Focused Eddie import
+
+Read-only profile import is newly implemented from the same pinned Eddie commit
+`67e213bfeae270f1f26c62f454f9dfadd5342df9`: `Lib.Core/Storage.cs`
+(v1/v2 envelope, profile ID, default password and XML options),
+`Lib.Core/Crypto/Manager.cs` and its AES implementation (authenticated encrypted
+payload), and `Lib.Platform.Linux/Platform.cs` (`OsCredentialSystemRead`, the
+Secret Service attribute `Eddie Profile`). Keyring import only reads that item;
+it never writes or deletes Eddie items. Only credentials and last-server
+preference are imported into the reduced product surface. Synthetic vectors use
+Python hashlib/hmac and OpenSSL, authored in scripts/generate-import-fixtures.py.
+Runtime interoperability uses the official signed-repository Eddie UI 2.26.2
+package in the Ubuntu GNOME development VM, separately installed and not bundled.
+
+## Tray assets and networking helper
+
+`src/tray_icon.rs` and `resources/wave-vpn.svg` are newly authored power badges,
+GPL-3.0-or-later. StatusNotifier tray icons carry their own ARGB pixel data and
+do not depend on an icon theme name.
+
+`src/service.rs` is an independently authored systemd socket broker, using
+SO_PEERCRED UID authorization and a fixed action allowlist to launch the existing
+validated worker. The archived README was inspected only to distinguish its
+networking helper from its optional boot-persistent lock. No archived backend,
+tests or packaging were copied.

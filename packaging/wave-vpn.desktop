@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Wave VPN
+Comment=Unofficial AirVPN WireGuard client
+Exec=wave-vpn-gui
+Icon=wave-vpn
+Terminal=false
+Categories=Network;Security;
+StartupNotify=true

@@ -8,21 +8,31 @@ pinned Eddie references and authored presentation assets.
 
 ## Build and install
 
-Requires Rust. Connections currently require AirVPN Hummingbird 2.x and its
-runtime dependencies, plus `pkexec` with a running authentication agent.
+Requires Rust. Linux connections require kernel WireGuard, `wireguard-tools`,
+`iproute2`, `nftables` and systemd. A bare binary installation also needs
+`pkexec` with an authentication agent for first-use helper setup. The installer
+authorizes your desktop user once; subsequent GUI connections need no password.
+DNS supports systemd-resolved, resolvconf, or a backed-up resolv.conf file.
+The UI builds on macOS; VPN connections currently have a Linux backend only.
 
 ```sh
 cargo test --all-targets
 cargo clippy --all-targets -- -D warnings
 cargo build --release --locked
-sudo install -m 755 target/release/wave-vpn target/release/wave-vpn-gui /usr/local/bin/
+sudo bash scripts/install.sh install
 wave-vpn-gui
 ```
 
-The GUI runs as your user. A privileged worker validates structured WireGuard
-profile data received through a pipe and invokes root-owned Hummingbird with
-Network Lock enabled. Passwords are prompted privately or entered in the GUI;
-account credentials are kept in memory rather than saved by this app.
+The GUI runs as your user. A root-owned, socket-activated helper authorizes the
+installing user through kernel peer credentials and launches a worker for a fixed
+set of networking actions. The worker validates structured WireGuard profile/options
+data received through a pipe. It configures its own WireGuard
+interface, policy routes and nftables table, and keeps a root-only recovery record.
+It never accepts shell commands or raw profile directives. Network lock stays
+active after disconnect, failure or worker crash until explicitly disabled. Passwords are prompted privately or entered in the GUI;
+sign-in saves credentials automatically in the system keyring. If secure storage
+is unavailable, the UI warns before sign-in that credentials will be stored in
+plaintext in a private local file. Sign-out removes the saved account.
 
 Generate a private configuration for another VPN manager:
 
@@ -38,12 +48,45 @@ Optional live bootstrap test, using a synthetic invalid account:
 cargo test --test protocol live_bootstrap -- --ignored
 ```
 
-## Status
+## Focused scope
 
-New protocol implementation, controller and views with Wave's design and authored
-icons/fonts. Tray support, traffic statistics, persistent preferences and country
-grouping still need restoration. Authenticated connections, Hummingbird integration
-and leak/firewall behavior require Linux runtime testing before release.
+Keep simple sign-in/sign-out with automatic secure storage, read-only Eddie import,
+server search/favorites, connect/reconnect, Network Lock, status/logs and tray.
+Settings have two tabs and five preferences. Advanced routing, forwarding, DNS
+and transport tuning are outside the desktop UI; boot autoconnect is deferred.
+See [scope](docs/PARITY.md).
+
+When enabled, Network Lock stays on after Disconnect, Quit and Recover.
+The toggle also works during an active tunnel and remembers your confirmed
+choice. To restore normal internet access, turn it off in Settings, or use
+`sudo wave-vpn lock-disable`. Enabling it while disconnected needs
+no additional service installation. The networking helper and boot-persistent
+lock are separate. Ordinary lock survives app exit, but reboot persistence
+requires the optional `lock-install` / `lock-enable` CLI service. LAN access and
+physical-interface ping bypass are off by default. Loopback, DHCP/IPv6 neighbor
+discovery, tunnel transport and pinned AirVPN bootstrap endpoints are permitted.
+
+Eddie import accepts XML and v1/v2 profiles with default/password/keyring
+protection. Linux keyring import reads Eddie's existing Secret Service item and
+does not modify it. Imported credentials fill the sign-in form; successful
+sign-in saves them automatically. Advanced Eddie settings are omitted.
+Install `libsecret-tools` and unlock your desktop keyring for saved accounts.
+
+Authenticated backend checks pass on Ubuntu GNOME with Comae and Orion: real
+IPv4/IPv6 traffic, AirVPN DNS, switching/reconnect and Network Lock after
+disconnect/crash/Recover. Exact test scope and remaining UI/platform limits are
+in the [verification record](docs/VERIFICATION.md).
+
+Run the isolated networking checks **inside a Linux test VM**:
+
+```sh
+cargo build --bins
+sudo python3 tests/linux_network.py target/debug/wave-vpn
+sudo env WAVE_TEST_SERVICE=1 python3 tests/linux_network.py target/debug/wave-vpn
+```
+
+The runner creates private mount/network/PID namespaces and an /etc overlay.
+It does not require AirVPN credentials or internet access.
 
 [Verification record](docs/VERIFICATION.md). This is an unpublished development build.
 

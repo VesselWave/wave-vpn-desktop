@@ -1,0 +1,32 @@
+name: Checks
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  rust:
+    strategy:
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install Rust checks
+        run: rustup component add rustfmt clippy
+      - run: cargo fmt --check
+      - run: cargo test --locked --all-targets
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo build --release --locked --bins
+      - if: runner.os == 'Linux'
+        name: Install namespace dependencies and validate networking
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wireguard-tools iproute2 nftables curl dbus systemd-resolved
+          sudo python3 tests/linux_network.py target/release/wave-vpn
+      - if: runner.os == 'Linux'
+        name: Stage install and uninstall
+        run: |
+          stage=$(mktemp -d)
+          DESTDIR="$stage" bash scripts/install.sh install
+          test -x "$stage/usr/local/bin/wave-vpn"
+          DESTDIR="$stage" bash scripts/install.sh uninstall
+          test ! -e "$stage/usr/local/bin/wave-vpn"

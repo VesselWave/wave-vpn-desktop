@@ -5,9 +5,12 @@ edition = "2021"
 license = "GPL-3.0-or-later"
 description = "Independent AirVPN client, reimplemented from Eddie references"
 
+# Stay standalone even when copied below an older parent Cargo workspace.
+[workspace]
+
 [features]
 default = ["desktop"]
-desktop = ["dep:iced"]
+desktop = ["dep:iced", "dep:png", "dep:ksni"]
 
 [lib]
 name = "wave_protocol"
@@ -23,12 +26,16 @@ required-features = ["desktop"]
 
 [dependencies]
 aes = "0.8"
+libc = "0.2"
+hmac = "0.12"
+pbkdf2 = "0.12"
+sha1 = "0.10"
+sha2 = "0.10"
 anyhow = "1"
 base64 = "0.22"
 cbc = { version = "0.1", features = ["alloc"] }
 clap = { version = "4", features = ["derive"] }
 iced = { version = "0.14", features = ["tokio", "svg"], optional = true }
-nix = { version = "0.29", features = ["signal", "user"] }
 rand = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls-native-roots"] }
 roxmltree = "0.20"
@@ -38,3 +45,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tempfile = "3"
 zeroize = "1"
+png = { version = "0.17", optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ksni = { version = "0.3", default-features = false, features = ["async-io", "blocking"], optional = true }
+nix = { version = "0.29", features = ["signal", "user"] }
+fs2 = "0.4"
+signal-hook = "0.3"

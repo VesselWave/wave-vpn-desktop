@@ -1,3 +1,14 @@
 /target/
 *.conf
 .DS_Store
+
+# Local account secrets and generated Eddie profiles
+.env
+.env.*
+*.profile
+
+# Python verification tooling
+__pycache__/
+
+# Automatic local credential fallback
+account.json
