@@ -4654,7 +4654,7 @@ dependencies = [
 
 [[package]]
 name = "wave-vpn"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "aes",
  "anyhow",
@@ -4671,6 +4671,7 @@ dependencies = [
  "png",
  "rand 0.8.8",
  "reqwest",
+ "resvg",
  "roxmltree",
  "rpassword",
  "rsa",

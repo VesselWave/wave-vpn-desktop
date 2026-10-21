@@ -138,7 +138,7 @@ fn live_bootstrap_decrypts_an_explicit_account_refusal() {
             "wave-protocol-test-invalid-000000000000".into(),
         ),
         ("password".into(), "intentionally-invalid".into()),
-        ("software".into(), "WaveVPN_0.2-dev".into()),
+        ("software".into(), "WaveVPN_0.1-dev".into()),
         ("system".into(), "Linux".into()),
         ("arch".into(), "test".into()),
         ("version".into(), "295".into()),

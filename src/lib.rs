@@ -72,7 +72,7 @@ impl Client {
             ("act".into(), action.into()),
             ("login".into(), login.into()),
             ("password".into(), password.into()),
-            ("software".into(), "WaveVPN_0.2-dev".into()),
+            ("software".into(), "WaveVPN_0.1-dev".into()),
             ("system".into(), "Linux".into()),
             ("arch".into(), std::env::consts::ARCH.into()),
             ("version".into(), "295".into()),

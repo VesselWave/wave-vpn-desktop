@@ -218,6 +218,14 @@ pub fn ghost(t: &Theme, status: button::Status) -> button::Style {
         ..Default::default()
     }
 }
+pub fn column_heading(t: &Theme, status: button::Status) -> button::Style {
+    let mut style = ghost(t, status);
+    style.background = None;
+    if matches!(status, button::Status::Hovered | button::Status::Pressed) {
+        style.text_color = colors(t).text;
+    }
+    style
+}
 pub fn link(t: &Theme, status: button::Status) -> button::Style {
     let mut style = ghost(t, status);
     style.text_color = color(t, Ink::Accent);
@@ -231,11 +239,30 @@ pub fn picker(
     style.background = colors(t).bg.into();
     style.text_color = colors(t).text;
     style.border = Border {
-        color: colors(t).border,
+        color: if t.extended_palette().is_dark {
+            Color::from_rgb8(62, 62, 62)
+        } else {
+            Color::from_rgb8(200, 200, 200)
+        },
         width: 1.,
         radius: 8.into(),
     };
     style
+}
+pub fn picker_menu(t: &Theme) -> iced::widget::overlay::menu::Style {
+    let c = colors(t);
+    iced::widget::overlay::menu::Style {
+        background: c.surface.into(),
+        border: Border {
+            color: c.border,
+            width: 1.,
+            radius: 8.into(),
+        },
+        text_color: c.text,
+        selected_text_color: c.text,
+        selected_background: c.hover.into(),
+        shadow: Shadow::default(),
+    }
 }
 pub fn selected(active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |t, s| {
@@ -266,16 +293,22 @@ pub fn primary(t: &Theme, status: button::Status) -> button::Style {
 }
 pub fn power(active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |t, status| button::Style {
-        background: Some(if active || matches!(status, button::Status::Hovered) {
-            ACCENT.into()
-        } else {
-            colors(t).surface.into()
-        }),
-        text_color: if active {
-            Color::WHITE
-        } else {
-            color(t, Ink::Accent)
-        },
+        background: Some(
+            if matches!(status, button::Status::Hovered | button::Status::Pressed) {
+                if active {
+                    Color::from_rgb8(35, 82, 210).into()
+                } else if t.extended_palette().is_dark {
+                    Color::from_rgb8(35, 68, 135).into()
+                } else {
+                    Color::from_rgb8(210, 224, 255).into()
+                }
+            } else if active {
+                ACCENT.into()
+            } else {
+                colors(t).surface.into()
+            },
+        ),
+        text_color: if active { Color::WHITE } else { colors(t).text },
         border: Border {
             color: if active {
                 ACCENT
@@ -319,10 +352,16 @@ pub fn toggle(t: &Theme, status: toggler::Status) -> toggler::Style {
         | toggler::Status::Disabled { is_toggled } => is_toggled,
     };
     s.foreground = Color::WHITE.into();
-    s.background = if on {
-        ACCENT
-    } else {
-        Color::from_rgb8(58, 58, 58)
+    let dark = t.extended_palette().is_dark;
+    let hovered = matches!(status, toggler::Status::Hovered { .. });
+    s.background = match (on, hovered, dark) {
+        (true, true, true) => Color::from_rgb8(80, 140, 255),
+        (true, true, false) => Color::from_rgb8(30, 80, 210),
+        (true, false, _) => ACCENT,
+        (false, true, true) => Color::from_rgb8(96, 96, 96),
+        (false, true, false) => Color::from_rgb8(150, 150, 150),
+        (false, false, true) => Color::from_rgb8(58, 58, 58),
+        (false, false, false) => Color::from_rgb8(205, 205, 205),
     }
     .into();
     s.background_border_width = 0.;

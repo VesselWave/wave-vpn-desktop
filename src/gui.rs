@@ -344,6 +344,13 @@ impl Wave {
     fn dirty(&self) -> bool {
         self.draft != self.prefs.options
     }
+    fn server_score(&self, server: &Server) -> Option<u32> {
+        self.manifest.as_ref()?.desktop_score(
+            server,
+            self.pings.get(&server.name).copied(),
+            self.prefs.options.number("capacity_factor"),
+        )
+    }
     fn candidates(&self) -> Vec<&Server> {
         let Some(m) = &self.manifest else {
             return vec![];
@@ -369,11 +376,6 @@ impl Wave {
             })
             .collect();
         servers.sort_by(|a, b| {
-            let score = |s: &Server| {
-                m.score(s) + f64::from(*self.pings.get(&s.name).unwrap_or(&0))
-                    - self.prefs.options.number("capacity_factor") as f64
-                        * (s.capacity as f64 / 1000.)
-            };
             self.penalties
                 .get(&a.name)
                 .is_some_and(|t| *t > Instant::now())
@@ -383,7 +385,11 @@ impl Wave {
                         .get(&b.name)
                         .is_some_and(|t| *t > Instant::now()),
                 )
-                .then(score(a).total_cmp(&score(b)))
+                .then(
+                    self.server_score(a)
+                        .unwrap_or(u32::MAX)
+                        .cmp(&self.server_score(b).unwrap_or(u32::MAX)),
+                )
                 .then(a.name.cmp(&b.name))
         });
         servers

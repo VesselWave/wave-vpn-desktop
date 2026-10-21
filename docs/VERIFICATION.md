@@ -208,3 +208,49 @@ are rerun for this change. This does not add reboot/Wayland/polkit coverage.
 
 Limits: service restart is verified, actual OS reboot is not. Other distributions,
 Wayland and complete GUI connection/retry transactions remain unverified.
+
+## Desktop presentation follow-up — 2026-10-21
+
+- Ubuntu Linux: locked binaries build, all-target tests (including ARGB shield
+  rendering) and strict Clippy pass. Host Rust tests/build/Clippy also pass;
+  the existing macOS `block` future-compatibility warning remains.
+- Reused the original authored shield with white wave from the archived SVG;
+  connected/stalled/working/idle tray colors retain their existing mapping.
+- Server layout now uses available content width for compact mode, consistent
+  header/body columns and a scrollbar gutter; sort arrows use inline SVG icons,
+  title hover follows label bounds, and Best server has no extra “Now:” label.
+- Light dropdown menus follow the app's surface palette; off switches use a
+  lighter gray. This is a presentation change, with no VPN behavior changes.
+- Synthetic Linux GUI captures checked at 560, 900 and 1100 pixels wide: search
+  fits, compact rows retain locations, wide columns align and Score stays inline.
+- Switch hover now changes the track in both on/off states: darker blue/gray in
+  light mode and brighter blue/gray in dark mode, with a white thumb.
+- Sidebar footer separates status and Network Lock with more padding and bottom
+  space. Recover has a tooltip explaining DNS/tunnel cleanup and retained lock
+  protection, adapted from the archived presentation wording.
+- Old-layout reference follow-up: checked the synthetic 900px Linux rendering
+  with all six columns and a single-row toolbar. Rows are compact; Server and
+  Location share available width, long locations have full-text tooltips, and
+  column headings remain above the scroll area. Narrow windows retain compact
+  presentation. Recover's explanation is now a short single line and sidebar
+  Network Lock text does not wrap.
+- Server heading alignment uses the body row's 24px favorite slot, 8px gap and
+  14px cell padding. Best server text uses the same left edge. Header hover only
+  changes text color, and sorting uses stemless up/down chevrons.
+- Score follow-up adds independent synthetic ranking tests: 21% load and 27ms
+  yields 48 despite a higher user count; distant/congested servers rank lower.
+  Display, sorting and best-server selection call the same scoring function.
+  Missing ping, heavy congestion, capacity bonus and warnings are covered.
+- Final 900px Linux capture confirms Server/Best server/name left-edge alignment,
+  text-only heading hover and stemless Score chevron. Linux binaries build;
+  all-target tests and strict Clippy pass on Linux and the macOS host.
+- Best server icon alignment follow-up: lightning uses the same 24px icon column
+  as stars, followed by the same 8px gap and 14px text inset.
+- Linux render confirms lightning/star centers align while Server, Best server
+  and names keep their shared text edge. Build, all-target tests and Clippy pass.
+- Subsequent layout adjustment centers both icons in the full 46px leading
+  column, retaining the name alignment. Hover/selection spans the favorite column;
+  the star remains an independent button. Dropdown borders and power-button
+  glyph/hover colors have stronger contrast in both themes.
+- App package/display version is now 0.1.0 and the bootstrap software identifier
+  uses 0.1-dev. Host all-target tests, strict Clippy and locked release build pass.

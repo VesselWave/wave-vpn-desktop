@@ -65,6 +65,32 @@ impl Manifest {
             + server.load() / self.factors[1]
             + 100.0 * server.users as f64 / server.users_max.max(1) as f64 / self.factors[2]
     }
+    /// Desktop ranking: Eddie's speed terms with Wave's presentation policy.
+    /// Users have little weight; congestion above 60% receives a quadratic cost.
+    /// Missing ping contributes zero until a measurement arrives.
+    pub fn desktop_score(
+        &self,
+        server: &Server,
+        ping: Option<u32>,
+        capacity_factor: u64,
+    ) -> Option<u32> {
+        if !server.available() || !server.warning_open.is_empty() {
+            return None;
+        }
+        let load = server.load();
+        let users = if server.users_max == 0 {
+            100.
+        } else {
+            (100. * server.users as f64 / server.users_max as f64).floor()
+        };
+        let score = server.score_base / self.factors[0]
+            + load * self.factors[1]
+            + users * self.factors[2] / 1000.
+            + f64::from(ping.unwrap_or(0))
+            + (load - 60.).max(0.).powi(2)
+            - capacity_factor as f64 * (server.capacity as f64 / 1000.);
+        Some(score.max(0.) as u32)
+    }
     pub fn best(&self) -> Option<&Server> {
         self.servers
             .iter()

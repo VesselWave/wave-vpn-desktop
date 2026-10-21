@@ -29,8 +29,17 @@ AES-CBC/PKCS padding for data; associations encode base64 names and values.
 Bootstrap HTTP is intentional for direct-IP access, matching Eddie. CBC is not
 AEAD and has no independent MAC here; we do not claim otherwise.
 
-Server selection uses Eddie's base/load/users factors. Android optionally adds
-Wave's measured TCP latency preference; it is not identical to Eddie's scoring.
+Protocol scoring retains the pinned Eddie Android base/load/users calculation.
+Desktop displayed scores, score sorting and best-server selection share a new
+implementation based on the pinned Eddie `Lib.Core/ConnectionInfo.cs` speed
+terms. Wave's desktop policy reduces the user-count term by 1000 and adds a
+quadratic congestion cost above 60% load, matching the intended old app policy
+illustrated by the supplied screenshots. Measured TCP latency contributes to the
+score; unmeasured latency contributes zero until available. Retry penalties
+remain a separate selection safeguard. This policy is not exact Eddie parity.
+The archived scoring code was inspected to identify behavioral differences; no
+backend code or tests were copied. Desktop implementation and synthetic tests
+were written anew. Android scoring is unchanged.
 
 ## Authored presentation reused
 
@@ -105,8 +114,13 @@ package in the Ubuntu GNOME development VM, separately installed and not bundled
 
 ## Tray assets and networking helper
 
-`src/tray_icon.rs` and `resources/wave-vpn.svg` are newly authored power badges,
-GPL-3.0-or-later. StatusNotifier tray icons carry their own ARGB pixel data and
+`resources/wave-vpn.svg` reuses the authored shield/wave artwork from
+`old/linux/resources/airvpn.svg`; its two paths match the already carried-forward
+Android launcher foreground. `resources/wave-vpn-tray.svg` uses those same paths
+with a transparent background and a tighter view box. This reuse falls under the
+authored Android presentation assets recorded above, GPL-3.0-or-later.
+`src/tray_icon.rs` independently renders this SVG using resvg (MPL-2.0), already
+used by Iced, and converts its output to StatusNotifier ARGB. StatusNotifier tray icons carry their own ARGB pixel data and
 do not depend on an icon theme name.
 
 `src/service.rs` is an independently authored systemd socket broker, using

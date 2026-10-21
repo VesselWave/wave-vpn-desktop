@@ -117,13 +117,14 @@ pub fn shell(app: &Wave) -> Element<'_, Message> {
             } else {
                 "Network lock off"
             })
-            .size(12),
+            .size(12)
+            .wrapping(iced::widget::text::Wrapping::None),
             icon(Icon::ChevronRight, 12., Ink::Muted)
         ]
         .spacing(5)
         .align_y(Alignment::Center),
     )
-    .padding([4, 6])
+    .padding([8, 10])
     .on_press(Message::Section(Section::Lock))
     .style(theme::ghost);
     let brand: Element<_> = if rail {
@@ -156,42 +157,39 @@ pub fn shell(app: &Wave) -> Element<'_, Message> {
             .style(theme::ghost),
         );
     } else {
-        sidebar = sidebar
-            .push(
-                container(
-                    row![
-                        container(Space::new())
-                            .width(6)
-                            .height(6)
-                            .style(move |t: &Theme| iced::widget::container::Style {
-                                background: Some(
-                                    theme::color(
-                                        t,
-                                        if app.since.is_some() {
-                                            Ink::Accent
-                                        } else {
-                                            Ink::Faint
-                                        }
-                                    )
-                                    .into()
-                                ),
-                                border: iced::Border {
-                                    radius: 99.into(),
-                                    ..Default::default()
-                                },
-                                ..Default::default()
-                            }),
-                        text(&app.status).size(13)
-                    ]
-                    .spacing(8)
-                    .align_y(Alignment::Center),
-                )
-                .padding([0, 6]),
-            )
-            .push(lock);
+        let status = container(
+            row![
+                container(Space::new())
+                    .width(6)
+                    .height(6)
+                    .style(move |t: &Theme| iced::widget::container::Style {
+                        background: Some(
+                            theme::color(
+                                t,
+                                if app.since.is_some() {
+                                    Ink::Accent
+                                } else {
+                                    Ink::Faint
+                                }
+                            )
+                            .into()
+                        ),
+                        border: iced::Border {
+                            radius: 99.into(),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    }),
+                text(&app.status).size(13)
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
+        )
+        .padding([4, 10]);
+        sidebar = sidebar.push(column![status, lock].spacing(8));
     }
     let sidebar = container(sidebar)
-        .padding([16, 10])
+        .padding(iced::Padding::from([16, 10]).bottom(24))
         .width(if rail { 56. } else { 196. })
         .height(Fill)
         .style(theme::sidebar);
@@ -231,11 +229,7 @@ fn overview(app: &Wave) -> Element<'_, Message> {
         container(icon(
             Icon::Power,
             48.,
-            if connected {
-                Ink::OnAccent
-            } else {
-                Ink::Accent
-            },
+            if connected { Ink::OnAccent } else { Ink::Text },
         ))
         .center(136),
     )
@@ -324,6 +318,7 @@ fn overview(app: &Wave) -> Element<'_, Message> {
                         .padding([7, 10])
                         .text_size(14)
                         .style(theme::picker)
+                        .menu_style(theme::picker_menu)
                     ]
                     .align_y(Alignment::Center),
                 ));
@@ -389,15 +384,28 @@ fn overview(app: &Wave) -> Element<'_, Message> {
             .size(12)
             .style(theme::faint),
             Space::new().width(Fill),
-            button(
-                row![
-                    icon(Icon::Wrench, 14., Ink::Muted),
-                    text("Recover").size(12)
-                ]
-                .spacing(6)
+            tooltip(
+                button(
+                    row![
+                        icon(Icon::Wrench, 14., Ink::Muted),
+                        text("Recover").size(12)
+                    ]
+                    .spacing(6)
+                    .align_y(Alignment::Center)
+                )
+                .padding([6, 10])
+                .on_press(Message::Recover)
+                .style(theme::ghost),
+                container(
+                    text("Clean up VPN state; keep Network Lock.")
+                        .size(12)
+                        .wrapping(iced::widget::text::Wrapping::None)
+                )
+                .max_width(300)
+                .padding([6, 10])
+                .style(theme::panel),
+                tooltip::Position::Top,
             )
-            .on_press(Message::Recover)
-            .style(theme::ghost)
         ]
         .align_y(Alignment::Center)
     ]
@@ -455,7 +463,11 @@ fn servers(app: &Wave) -> Element<'_, Message> {
         .style(theme::input)
         .width(Fill);
     let count = app.manifest.as_ref().map(|m| m.servers.len()).unwrap_or(0);
-    let header = row![
+    // Use the available content width after the navigation and page padding.
+    let content_width = app.width - if app.width < 760. { 105. } else { 245. };
+    let narrow = content_width < 600.;
+    let stacked_controls = content_width < 640.;
+    let controls = row![
         search,
         button(icon(Icon::Refresh, 16., Ink::Muted))
             .style(theme::ghost)
@@ -463,11 +475,18 @@ fn servers(app: &Wave) -> Element<'_, Message> {
         text(format!("{count} servers"))
             .size(13)
             .style(theme::muted),
-        Space::new().width(Length::FillPortion(1)),
-        container(switches).padding(3).style(theme::segments)
     ]
     .spacing(12)
     .align_y(Alignment::Center);
+    let segments = container(switches).padding(3).style(theme::segments);
+    let header: Element<_> = if stacked_controls {
+        column![controls, segments].spacing(12).into()
+    } else {
+        row![controls, segments]
+            .spacing(20)
+            .align_y(Alignment::Center)
+            .into()
+    };
     let q = app.search.to_lowercase();
     let mut list: Vec<_> = app
         .manifest
@@ -503,10 +522,11 @@ fn servers(app: &Wave) -> Element<'_, Message> {
                 .get(&a.name)
                 .unwrap_or(&u32::MAX)
                 .cmp(app.pings.get(&b.name).unwrap_or(&u32::MAX)),
-            Sort::Score => {
-                let m = app.manifest.as_ref().unwrap();
-                m.score(a).total_cmp(&m.score(b))
-            }
+            Sort::Score => app
+                .server_score(a)
+                .unwrap_or(u32::MAX)
+                .cmp(&app.server_score(b).unwrap_or(u32::MAX))
+                .then(a.name.cmp(&b.name)),
         };
         if app.ascending {
             order
@@ -515,6 +535,7 @@ fn servers(app: &Wave) -> Element<'_, Message> {
         }
     });
     let mut rows = column![].spacing(2);
+    let mut table_header = None;
     if app.server_view == ServerView::Countries {
         let mut groups: BTreeMap<&str, Vec<&Server>> = BTreeMap::new();
         for s in list {
@@ -547,86 +568,100 @@ fn servers(app: &Wave) -> Element<'_, Message> {
             );
         }
     } else {
-        let mut headings = row![Space::new().width(42)].spacing(8);
-        let narrow = app.width < 840.;
+        let mut headings = row![].spacing(8);
         for (sort, label, width) in [
             (Sort::Name, "Server", 180.),
-            (Sort::Country, "Location", 110.),
-            (Sort::Load, "Load", 128.),
-            (Sort::Users, "Users", 48.),
-            (Sort::Ping, "Ping", 60.),
-            (Sort::Score, "Score", 42.),
+            (Sort::Country, "Location", 0.),
+            (Sort::Load, "Load", 104.),
+            (Sort::Users, "Users", 50.),
+            (Sort::Ping, "Ping", 64.),
+            (Sort::Score, "Score", 56.),
         ] {
             if narrow && matches!(sort, Sort::Country | Sort::Users | Sort::Score) {
                 continue;
             }
             headings = headings.push(
-                button(
-                    text(format!(
-                        "{}{}",
-                        label,
-                        if sort == app.sort {
-                            if app.ascending {
-                                " ↑"
+                container(
+                    button(
+                        row![
+                            text(label)
+                                .size(12)
+                                .wrapping(iced::widget::text::Wrapping::None),
+                            if sort == app.sort {
+                                icon(
+                                    if app.ascending {
+                                        Icon::ChevronUp
+                                    } else {
+                                        Icon::ChevronDown
+                                    },
+                                    12.,
+                                    Ink::Muted,
+                                )
                             } else {
-                                " ↓"
+                                Space::new().width(12).into()
                             }
-                        } else {
-                            ""
-                        }
-                    ))
-                    .size(12),
+                        ]
+                        .spacing(4)
+                        .align_y(Alignment::Center),
+                    )
+                    .padding([6, 0])
+                    .on_press(Message::Sort(sort))
+                    .style(theme::column_heading),
                 )
-                .padding(0)
-                .width(if sort == Sort::Name {
+                .width(if matches!(sort, Sort::Name | Sort::Country) {
                     Length::Fill
                 } else {
                     Length::Fixed(width)
-                })
-                .on_press(Message::Sort(sort))
-                .style(theme::ghost),
+                }),
             );
         }
-        rows = rows.push(headings).push(line());
+        table_header = Some(column![
+            container(row![
+                Space::new().width(46),
+                container(headings)
+                    .padding(iced::Padding::default().right(14))
+                    .width(Fill)
+            ])
+            .padding(iced::Padding::default().right(12)),
+            line()
+        ]);
         if app.server_view == ServerView::All && q.is_empty() {
             rows = rows.push(
                 button(
                     row![
-                        icon(Icon::Zap, 16., Ink::Accent),
-                        text("Best server").size(14),
-                        Space::new().width(Fill),
-                        text(
-                            app.selected()
-                                .map(|s| format!("Now: {}, {}", s.name, s.country.to_uppercase()))
-                                .unwrap_or_else(|| "Lowest load and latency".into())
-                        )
-                        .size(12)
-                        .style(theme::faint)
+                        container(icon(Icon::Zap, 16., Ink::Accent)).center_x(46),
+                        container(text("Best server").size(14).font(theme::MEDIUM))
+                            .padding(iced::Padding::default().right(14))
+                            .width(Fill),
                     ]
-                    .spacing(12),
+                    .align_y(Alignment::Center),
                 )
                 .on_press(Message::Select(Target::Best))
                 .style(theme::server_row(app.prefs.target == Target::Best))
                 .width(Fill)
-                .padding([8, 16]),
+                .padding([8, 0]),
             );
         }
         for s in list {
-            let favorite = button(icon(
-                if app.prefs.favorites.contains(&s.name) {
-                    Icon::StarFilled
-                } else {
-                    Icon::Star
-                },
-                16.,
-                if app.prefs.favorites.contains(&s.name) {
-                    Ink::Warning
-                } else {
-                    Ink::Faint
-                },
-            ))
-            .padding(4)
-            .style(theme::ghost)
+            let favorite = button(
+                container(icon(
+                    if app.prefs.favorites.contains(&s.name) {
+                        Icon::StarFilled
+                    } else {
+                        Icon::Star
+                    },
+                    16.,
+                    if app.prefs.favorites.contains(&s.name) {
+                        Ink::Warning
+                    } else {
+                        Ink::Faint
+                    },
+                ))
+                .center_x(46)
+                .center_y(19),
+            )
+            .padding(0)
+            .style(|_, _| button::Style::default())
             .on_press(Message::Favorite(s.name.clone()));
             let name: Element<_> = if narrow {
                 column![
@@ -641,16 +676,36 @@ fn servers(app: &Wave) -> Element<'_, Message> {
                 text(&s.name)
                     .size(14)
                     .font(theme::MEDIUM)
+                    .wrapping(iced::widget::text::Wrapping::None)
+                    .height(19)
                     .width(Fill)
                     .into()
             };
             let mut cells = row![name].spacing(8).align_y(Alignment::Center);
             if !narrow {
+                let location = format!("{}, {}", s.location, s.country.to_uppercase());
+                // Keep cities to one row; the tooltip always exposes the full location.
+                let location_width = (content_width - 386.) / 2.;
+                let limit = (location_width / 6.5).max(4.) as usize;
+                let label = if location.chars().count() > limit {
+                    format!("{}…", location.chars().take(limit - 1).collect::<String>())
+                } else {
+                    location.clone()
+                };
                 cells = cells.push(
-                    text(format!("{}, {}", s.location, s.country.to_uppercase()))
-                        .width(110)
-                        .size(12)
-                        .style(theme::muted),
+                    container(tooltip(
+                        text(label)
+                            .width(Fill)
+                            .size(12)
+                            .height(19)
+                            .wrapping(iced::widget::text::Wrapping::None)
+                            .style(theme::muted),
+                        container(text(location).size(12))
+                            .padding([6, 10])
+                            .style(theme::panel),
+                        tooltip::Position::Top,
+                    ))
+                    .width(Fill),
                 );
             }
             let load = s.load().clamp(0., 100.);
@@ -675,12 +730,12 @@ fn servers(app: &Wave) -> Element<'_, Message> {
                 row![bar, text(format!("{load:.0}%")).font(theme::MONO).size(13)]
                     .spacing(8)
                     .align_y(Alignment::Center)
-                    .width(128),
+                    .width(104),
             );
             if !narrow {
                 cells = cells.push(
                     text(s.users.to_string())
-                        .width(48)
+                        .width(50)
                         .font(theme::MONO)
                         .size(13),
                 );
@@ -692,7 +747,7 @@ fn servers(app: &Wave) -> Element<'_, Message> {
                         .map(|n| format!("{n} ms"))
                         .unwrap_or_else(|| "—".into()),
                 )
-                .width(60)
+                .width(64)
                 .font(theme::MONO)
                 .style(move |t: &Theme| iced::widget::text::Style {
                     color: Some(theme::color(
@@ -709,23 +764,35 @@ fn servers(app: &Wave) -> Element<'_, Message> {
             );
             if !narrow {
                 cells = cells.push(
-                    text(format!("{:.0}", app.manifest.as_ref().unwrap().score(s)))
-                        .width(42)
-                        .font(theme::MONO)
-                        .size(13),
+                    text(
+                        app.server_score(s)
+                            .map(|score| score.to_string())
+                            .unwrap_or_else(|| "—".into()),
+                    )
+                    .width(56)
+                    .font(theme::MONO)
+                    .size(13),
                 );
             }
-            let select = button(cells)
-                .width(Fill)
-                .padding([10, 14])
-                .on_press_maybe(
-                    s.available()
-                        .then(|| Message::Select(Target::Server(s.name.clone()))),
-                )
-                .style(theme::server_row(
-                    app.prefs.target == Target::Server(s.name.clone()),
-                ));
-            rows = rows.push(row![favorite, select].spacing(8).align_y(Alignment::Center));
+            let select = button(
+                row![
+                    favorite,
+                    container(cells)
+                        .padding(iced::Padding::default().right(14))
+                        .width(Fill)
+                ]
+                .align_y(Alignment::Center),
+            )
+            .width(Fill)
+            .padding([8, 0])
+            .on_press_maybe(
+                s.available()
+                    .then(|| Message::Select(Target::Server(s.name.clone()))),
+            )
+            .style(theme::server_row(
+                app.prefs.target == Target::Server(s.name.clone()),
+            ));
+            rows = rows.push(select);
         }
     }
     if count == 0 {
@@ -747,9 +814,15 @@ fn servers(app: &Wave) -> Element<'_, Message> {
         .on_press(Message::Connect)
         .padding([10, 20])
         .style(theme::primary);
+    let mut table = column![].spacing(4).height(Fill);
+    if let Some(headings) = table_header {
+        table = table.push(headings);
+    }
+    table = table
+        .push(scrollable(container(rows).padding(iced::Padding::default().right(12))).height(Fill));
     column![
         header,
-        scrollable(rows).height(Fill),
+        table,
         line(),
         row![
             text(target_label(&app.prefs.target))
@@ -1000,6 +1073,7 @@ fn settings(app: &Wave) -> Element<'_, Message> {
             .text_size(14)
             .width(160)
             .style(theme::picker)
+            .menu_style(theme::picker_menu)
             .into(),
             Input::Text | Input::Number => text_input(
                 if matches!(field.input, Input::Number) {

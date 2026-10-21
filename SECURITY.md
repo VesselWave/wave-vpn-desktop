@@ -1,6 +1,6 @@
 # Security status
 
-Wave VPN 0.2.0 is an unpublished development version. No version currently has
+Wave VPN 0.1.0 is an unpublished development version. No version currently has
 a production support or security maintenance promise. Do not interpret a passing
 unit test or a macOS UI build as verified VPN protection. Release gates and tested
 environments are tracked in docs/PARITY.md and docs/VERIFICATION.md.
