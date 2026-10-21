@@ -35,9 +35,9 @@ Wave's measured TCP latency preference; it is not identical to Eddie's scoring.
 ## Authored presentation reused
 
 The user identifies VesselWave's Android UI and desktop redesign as their work.
-The archived desktop design contribution is recorded at (base `8a24d924089513d368a7031510d79a055cf85ca5`,
-head `2842026e4420a1a34ea85abd65a563bc5c7e0e7e`). The contribution modifies existing GUI
-files, so it is not treated as permission to copy every file it touches.
+The archived desktop design contribution is recorded at base `8a24d924089513d368a7031510d79a055cf85ca5`,
+head `2842026e4420a1a34ea85abd65a563bc5c7e0e7e`. The contribution modifies
+existing GUI files, so it is not treated as permission to copy every file it touches.
 
 - Android: authored Compose screens/components/theme/icons from the archived
   Android repository at `cd2538c`, plus UI resources and ordinary Gradle tooling.
@@ -68,16 +68,6 @@ source is bundled. It manages routing, DNS, WireGuard and Network Lock.
 [AirVPN's third-party forum](https://airvpn.org/forums/forum/49-third-party-software/)
 provides community integration context, not a protocol specification or a license
 grant for projects linked there.
-
-## Archived repositories
-
-GitHub API verified on 2026-10-21 UTC:
-
-- Archived desktop repository: private, archived.
-- `VesselWave/wave-vpn-android`: private, archived.
-
-The parent development workspace retains the local `old/` archives. They are
-not present in this repository and are not build inputs.
 
 ## Repository separation
 
