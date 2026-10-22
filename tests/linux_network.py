@@ -128,10 +128,12 @@ threading.Thread(target=tcp,daemon=True).start()
 while True: time.sleep(60)
 """
     dns_server = subprocess.Popen(["ip", "netns", "exec", "peer", "python3", "-c", dns_code])
-    def dns_probe(ip, tcp=False):
+    def dns_probe(ip, tcp=False, physical=False):
         family = socket.AF_INET6 if ':' in ip else socket.AF_INET
         with socket.socket(family, socket.SOCK_STREAM if tcp else socket.SOCK_DGRAM) as sock:
             sock.settimeout(.4)
+            if physical:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, b"physical0\0")
             try:
                 sock.connect((ip, 53))
                 if tcp:
@@ -144,7 +146,7 @@ while True: time.sleep(60)
     def blocked_dns():
         for ip in ["192.168.78.2", "2001:db8:77::2"]:
             for tcp in [False, True]:
-                assert not dns_probe(ip, tcp), f"DNS leak to {ip} tcp={tcp}"
+                assert not dns_probe(ip, tcp, physical=True), f"DNS leak to {ip} tcp={tcp}"
 
     time.sleep(1.2)
     for ip in ["192.168.78.2", "2001:db8:77::2"]:
@@ -238,6 +240,58 @@ while True: time.sleep(60)
     run(*worker_command(binary, "lock-disable"))
     assert http("198.18.0.2"), "explicit disable did not restore networking"
     print("PASS dual-stack handshake, tunnel traffic/stats, blocked bypass, disconnect/Recover retain IPv4/IPv6/DNS protection; explicit disable restores internet", flush=True)
+
+    def actual_status():
+        output = run(*worker_command(binary, "network-status"))
+        return next(json.loads(line)["status"] for line in output.splitlines() if line.startswith('{') and json.loads(line).get("event") == "network_status")
+
+    assert actual_status()["enabled"] is False
+    Path("/run/wave-vpn-protection.json").write_text('{"enabled":true}')
+    assert actual_status()["enabled"] is False, "cached preference mistaken for actual lock"
+    proc, events = worker(request)
+    connected(proc, events)
+    assert actual_status()["enabled"] is True and actual_status()["worker_active"]
+    Path("/run/wave-vpn-protection.json").unlink()
+    assert actual_status()["enabled"] is True, "missing cached state hid actual lock"
+    os.kill(worker_pid(proc), signal.SIGKILL)
+    proc.wait(timeout=3)
+    assert actual_status()["recovery_needed"] and not actual_status()["worker_active"]
+    # The next worker must recover the stale resolver/routes itself, retaining lock.
+    proc, events = worker(request)
+    connected(proc, events)
+    assert http("10.77.0.1")
+    disconnect(proc)
+    stopped(proc)
+    assert not actual_status()["recovery_needed"] and actual_status()["enabled"]
+    run(*worker_command(binary, "lock-disable"))
+    run("nft", "-f", "-", data='table inet wave_vpn { comment "Foreign owner"; }')
+    assert actual_status()["enabled"] is None, "foreign table reported as confirmed protection"
+    conflict = subprocess.run(worker_command(binary, "lock-enable"), input="", capture_output=True, text=True, timeout=10)
+    assert conflict.returncode != 0 and 'Foreign owner' in run("nft", "list", "table", "inet", "wave_vpn")
+    run("nft", "delete", "table", "inet", "wave_vpn")
+    print("PASS live firewall status ignores stale/missing cache, detects foreign tables; reconnect repairs crash journal without unlocking", flush=True)
+    proc, events = worker(request)
+    connected(proc, events)
+    run("ip", "link", "set", "physical0", "down")
+    blocked_dns()
+    run("ip", "link", "set", "physical0", "up")
+    # Linux can remove IPv6 addresses/routes when an interface goes down.
+    run("ip", "-6", "address", "replace", "2001:db8:77::1/64", "dev", "physical0", "nodad")
+    run("ip", "-6", "route", "replace", "default", "via", "2001:db8:77::2")
+    assert http("10.77.0.1"), "tunnel did not survive a short uplink change"
+    os.kill(worker_pid(proc), signal.SIGSTOP)
+    time.sleep(16)
+    os.kill(worker_pid(proc), signal.SIGCONT)
+    stopped(proc, success=False)
+    assert not http("198.18.0.2"), "event-loop pause released protection"
+    blocked_dns()
+    run(*worker_command(binary, "lock-disable"))
+    print("PASS uplink down/up and long worker pause detection; failure retains protection (pause simulates resume, not physical suspend)", flush=True)
+    if os.environ.get("WAVE_TEST_FOCUS") == "lifecycle":
+        server.terminate()
+        dns_server.terminate()
+        return
+
 
     lan_allowed = json.loads(json.dumps(request))
     lan_allowed["options"]["allow_lan"] = "true"

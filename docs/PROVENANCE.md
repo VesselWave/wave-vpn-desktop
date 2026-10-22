@@ -128,3 +128,21 @@ SO_PEERCRED UID authorization and a fixed action allowlist to launch the existin
 validated worker. The archived README was inspected only to distinguish its
 networking helper from its optional boot-persistent lock. No archived backend,
 tests or packaging were copied.
+
+## Desktop verification and recovery review — 2026-10-21
+
+The new provider exit/DNS checks in `src/checks.rs` and the Linux monitor were
+independently implemented from the already pinned Eddie commit above,
+`Lib.Core/Providers/Service.cs::OnVpnEstablished` (tunnel IP identity, pinned
+exit HTTPS endpoints and random DNS challenge receipt). Public manifest check
+metadata and exit addresses are now parsed. Only the pinned AirVPN check domain
+and DNS-query template are accepted; no scripts or arbitrary check URLs are
+accepted by the privileged worker. No additional upstream code was copied.
+
+AirVPN staff reports informed recovery requirements, not implementation reuse:
+[stale VPN DNS after dirty shutdown](https://airvpn.org/forums/topic/56835-network-lock-bugged-out/)
+and [Ubuntu DNS after reconnect](https://airvpn.org/forums/topic/63864-dns-leak-after-automatic-switch-to-another-server-when-internet-disconnects/).
+These support possible causes, not a diagnosis of the user's prior incident.
+Actual firewall queries, bounded retry, diagnostics, release verification and
+new regression tooling are newly authored. Archived backend/tests/packaging
+remain excluded.

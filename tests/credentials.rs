@@ -96,7 +96,8 @@ fn eddie_keyring_lookup_uses_profile_id_and_legacy_filename_without_modifying_it
 #[ignore = "Set WAVE_EDDIE_TEST_PROFILE to a synthetic profile saved by installed Eddie"]
 fn imports_profile_written_by_installed_eddie() {
     let path = std::env::var_os("WAVE_EDDIE_TEST_PROFILE").expect("synthetic profile path");
-    let imported = wave_protocol::eddie::read(std::path::Path::new(&path), "").unwrap();
+    let password = std::env::var("WAVE_EDDIE_TEST_PASSWORD").unwrap_or_default();
+    let imported = wave_protocol::eddie::read(std::path::Path::new(&path), &password).unwrap();
     assert_eq!(imported.login, "synthetic-user");
     assert_eq!(imported.password, "synthetic-pass");
 }

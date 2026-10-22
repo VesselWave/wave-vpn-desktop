@@ -254,3 +254,126 @@ Wayland and complete GUI connection/retry transactions remain unverified.
   glyph/hover colors have stronger contrast in both themes.
 - App package/display version is now 0.1.0 and the bootstrap software identifier
   uses 0.1-dev. Host all-target tests, strict Clippy and locked release build pass.
+
+## Desktop release requirements implementation — 2026-10-21
+
+This section supersedes the earlier feature inventory, without turning local
+VM evidence into a production support promise. Android is unchanged.
+
+Implemented:
+
+- Per-family AirVPN HTTPS tunnel-identity checks and a random system-resolver DNS
+  challenge/receipt, referenced to pinned official Eddie 2.27.2 Service.cs.
+  Overview shows verified/failed/unavailable/not-checked results. Checks repeat
+  every 60 seconds; an unavailable check is not a verified connection or proof
+  of a leak. Generic/local peers do not acquire provider-verification claims.
+- Actual owned nftables query through the authorized helper, with unknown status
+  on failure/conflict, no dependence on cached protection JSON, and rejection of
+  query replies predating a local networking change. Startup can identify pending
+  recovery. GUI explains the ordinary session lock's reboot limit.
+- Recovery available before login; a new exclusive worker also repairs Wave's
+  leftover journal after a crash. No third-party firewall/DNS state is reset.
+  Encrypted account refusals are distinguished from bootstrap/network failures.
+- Cancellable helper setup and retries; transient monitor failures back off from
+  3 to 120 seconds, reset after a stable session, and remain cancellable while
+  waiting. Setup/configuration/recovery errors stop automatic retry. Failed data
+  refreshes no longer start a new login attempt on every GUI tick.
+- Support report preview/copy/export with check/protection results, tool presence
+  and fixed failure categories. No raw logs/accounts/keys/addresses/environment
+  enter the report. Export writes exactly the preview, mode 0600, no overwrite.
+- Optional local candidate signing and isolated-keyring signature/fingerprint/
+  checksum verification. No maintainer private key generated or release published.
+  Uninstall now queries actual protection, refusing unknown/enabled state.
+
+Passed:
+
+- macOS and Ubuntu ARM64: all-target Rust tests, strict Clippy, debug binaries.
+  New regression tests cover mismatched identity/DNS tokens, foreign/malformed
+  firewall state, stale status replies, stopped-session UI, retry cancellation,
+  setup error retry refusal, diagnostic contents/permissions/overwrite and clocks.
+- Real AirVPN sessions: IPv4/IPv6 tunnel identity and system DNS receipt verified;
+  normal tunnel traffic and protected switch/disconnect/crash/recovery passed.
+  Wrong system DNS and unavailable provider endpoint refuse Connected and retain
+  Network Lock. The final combined capture run passes with protection enabled
+  before capture: no exercised physical DNS/DoT/direct-HTTPS probe bypass during
+  connections, switching, disconnect, crash, wrong DNS or check-service outage.
+  Encrypted sign-in bootstrap also succeeds with deliberately broken DNS and an
+  enabled lock, before any tunnel; only synthetic invalid credentials are used
+  in the VM, and the decrypted account refusal is correctly classified.
+- Expanded namespace suite through the broker: actual status with stale/deleted
+  caches, foreign-table rejection without modification, automatic recovery on
+  the next connection after SIGKILL, uplink down/up, and 16-second worker pause.
+  Pause detection exercises the resume path; it is not a physical suspend test.
+  Existing lock toggle/forwarding/routes/DNS backend/crash suites also pass.
+- GNOME X11 and **nested GNOME Wayland**: diagnostics, unknown protection and
+  connected screens render. X11 actual mouse actions Copy report and Save report
+  produce byte-identical JSON with mode 0600. Nested Wayland has no tray host,
+  and the app remains visible. This is not a full GDM/PAM Wayland session test.
+- Installed helper authorization/UID rejection, input timeout/rejection and
+  availability checks; isolated Secret Service save/load/delete tests pass.
+- Actual official **Eddie 2.26.2** writes default-, password- and keyring-protected
+  v2 profiles; Wave imports all three without modifying source bytes or removing
+  the Eddie keyring item. The updated runner creates a private bus/keyring and
+  does not use a normal desktop collection. Refreshed official ARM64 APT metadata
+  still offers 2.26.2; 2.27.2 runtime package interoperability remains a gate.
+- Linux synthetic signing test: valid signature/fingerprint/checksums accepted;
+  wrong trusted fingerprint, altered artifact and altered manifest rejected.
+  The host Nix GPG could not create its ephemeral test key; the Linux test passed.
+
+Test corrections: capture originally started before the initial lock, including
+an intentionally unprotected baseline boundary. The combined runner now enables
+and checks the lock before capture. The uplink test also exposed that Linux can
+remove the IPv6 physical route on link-down, letting an unbound probe travel
+through the encrypted tunnel. Physical leak probes now bind the physical NIC,
+with IPv6 underlay restored after link-up; encrypted DNS is not counted as bypass.
+
+Remaining release gates: x86_64 execution, real suspend/resume, full GNOME Wayland
+session interactions, complete real-account GUI/polkit transactions, runtime import with an available 2.27.2 package,
+maintainer signing fingerprint and working private security contact. The GitHub
+repository is private and its private-vulnerability-reporting endpoint returned
+404; source changes cannot establish a public contact. No production readiness
+or exhaustive leak-proof claim is made. See RELEASE-GATES.md.
+
+Actual reboot attempt: the guest accepted `systemctl reboot`, but Lima/VZ did not
+restore guest-agent or SSH connectivity within the bounded test deadline. Host
+agent reported guest-agent connection resets and no route to the guest. This is
+recorded as a failed environment-level reboot check, not an application pass.
+The VM was force-stopped and cold-started to restore the test environment; cold
+startup/helper evidence is recorded separately below. Warm reboot and full
+reboot policy/order coverage remain release gates.
+
+VM recovery follow-up: offline read-only inspection found the original 6.8.0-134
+kernel/initrd alongside a newer installed kernel. Direct boot of the known test
+kernel, preserving the root disk, plus masking the startup network wait restored
+SSH, DNS, the guest agent and GNOME X11/viewer services. Original Lima YAML and
+EFI variables were restored; direct-boot files/arguments are local VM recovery
+artifacts, not application dependencies or committed files. The original EFI
+boot failure's exact cause is not established. Actual cold startup now confirms
+that the installed authorized helper works without another authorization and
+reports protection off, with no active worker/recovery journal. This workaround
+is not proof of standard EFI boot, boot-persistent lock ordering or suspend.
+
+Final negative-provider run also passes a partial IPv6 endpoint outage: IPv4
+identity verifies, IPv6 is unavailable, Connected is refused, and the lock/DNS
+block remain. Outgoing capture is identified by the isolated NIC's Ethernet
+source, independent of source IP, so incoming baseline HTTPS retransmissions are
+not mislabeled as leaks. The final run reported total=0, outgoing=0, incoming
+baseline HTTPS=0. An earlier expanded run had three unclassified capture packets;
+its direction was not retained, so no cause is asserted for that run. The latest
+explicit direction-aware capture and the prior full combined run both pass.
+A focused broker lifecycle rerun after the monitor clock adjustment also passes;
+the monitor excludes its own bounded verification work from resume detection.
+
+The bounded actual reboot check then **passes on the recovered VM**: new kernel
+boot ID, authorized helper available without a new password prompt, and actual
+protection off with no active worker or recovery journal. This uses the local
+known-kernel/network-wait workaround above; it does not validate the original
+EFI startup path, an enabled persistent-lock policy, or physical suspend.
+Final UI handling retains specific DNS/identity/per-family check failure messages
+and results after worker exit instead of replacing them with a generic error.
+
+Final all-target tests and strict Clippy pass again on both macOS and Ubuntu
+ARM64 after the last error-handling changes. Missing account devices now request
+account configuration rather than network recovery; missing getent is detected
+before configuration and does not enter transient network retry. Final Linux
+binaries are installed in the recovered VM. Android worktree is unchanged.

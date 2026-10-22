@@ -9,7 +9,7 @@ pinned Eddie references and authored presentation assets.
 ## Build and install
 
 Requires Rust. Linux connections require kernel WireGuard, `wireguard-tools`,
-`iproute2`, `nftables` and systemd. A bare binary installation also needs
+`iproute2`, `nftables`, `getent` (Ubuntu libc-bin) and systemd. A bare binary installation also needs
 `pkexec` with an authentication agent for first-use helper setup. The installer
 authorizes your desktop user once; subsequent GUI connections need no password.
 DNS supports systemd-resolved, resolvconf, or a backed-up resolv.conf file.
@@ -89,6 +89,32 @@ The runner creates private mount/network/PID namespaces and an /etc overlay.
 It does not require AirVPN credentials or internet access.
 
 [Verification record](docs/VERIFICATION.md). This is an unpublished development build.
+
+## Connection checks and recovery
+
+The app checks the advertised AirVPN tunnel identity for each configured IP
+family and verifies that AirVPN received a fresh challenge through your system
+DNS. Results appear in Overview. Checks repeat periodically; failed checks stop
+the connection and auto-reconnect uses cancellable backoff. A check-service
+outage is shown as unavailable, not as proof of a leak. Network Lock follows
+its last explicit setting through recovery and retry.
+
+If sign-in cannot reach AirVPN, **Recover** in Overview is available before you
+sign in. It restores only Wave's journaled DNS/tunnel resources, keeping an
+enabled lock. Bootstrap uses pinned direct-IP endpoints and does not require
+working public DNS. Account rejection is shown separately from network failure.
+If Eddie left its own DNS/firewall state behind, recover that in Eddie first;
+Wave does not reset other applications' networking.
+
+**Logs → Support report** previews safe diagnostics and lets you copy or save
+exactly that report. It includes check/protection results and tool availability,
+with fixed failure categories. Accounts, keys, addresses and raw logs are omitted;
+there is no automatic upload. `wave-vpn diagnostics` offers the CLI metadata
+snapshot; `wave-vpn service-client network-status` queries actual firewall and
+recovery state without changing networking or requesting new authorization.
+
+[Release gates and signature verification](docs/RELEASE-GATES.md) distinguish
+implemented features from the remaining public-release requirements.
 
 ## Published history privacy
 

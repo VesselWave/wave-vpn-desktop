@@ -13,6 +13,8 @@ pub struct Server {
     pub country: String,
     pub location: String,
     pub entries: Vec<IpAddr>,
+    pub exits: Vec<IpAddr>,
+    pub support_check: bool,
     pub bandwidth: u64,
     pub capacity: u64,
     pub users: u32,
@@ -55,8 +57,18 @@ pub struct Manifest {
     pub bootstrap: Bootstrap,
     pub refresh_minutes: u32,
     pub factors: [f64; 3],
+    pub check_domain: String,
+    pub check_dns_query: String,
 }
 impl Manifest {
+    pub fn provider_check(&self, server: &Server) -> Option<crate::checks::ProviderCheck> {
+        server.support_check.then(|| crate::checks::ProviderCheck {
+            server: server.name.clone(),
+            exits: server.exits.clone(),
+            domain: self.check_domain.clone(),
+            dns_query: self.check_dns_query.clone(),
+        })
+    }
     pub fn score(&self, server: &Server) -> f64 {
         if !server.available() || !server.warning_open.is_empty() {
             return f64::INFINITY;
@@ -117,6 +129,12 @@ pub fn parse_manifest(text: &str) -> Result<Manifest> {
         };
         servers.push(Server {
             name: attr("name").into(),
+            exits: attr("ips_exit")
+                .split(',')
+                .filter(|s| !s.trim().is_empty())
+                .map(|s| s.trim().parse())
+                .collect::<Result<_, _>>()?,
+            support_check: attr("support_check") == "1" || attr("support_check") == "true",
             country: attr("country_code").to_lowercase(),
             location: attr("location").into(),
             entries: attr("ips_entry")
@@ -171,6 +189,8 @@ pub fn parse_manifest(text: &str) -> Result<Manifest> {
         modes,
         bootstrap,
         factors,
+        check_domain: root.attribute("check_domain").unwrap_or("").into(),
+        check_dns_query: root.attribute("check_dns_query").unwrap_or("").into(),
         refresh_minutes: root
             .attribute("next_update")
             .and_then(|s| s.parse::<u32>().ok())
@@ -228,7 +248,9 @@ pub fn parse_account(text: &str, login: &str) -> Result<Account> {
             }
         })
         .collect();
-    ensure!(!devices.is_empty(), "Account contains no devices");
+    if devices.is_empty() {
+        return Err(crate::AccountDevicesMissing.into());
+    }
     Ok(Account {
         login: login.into(),
         expiration: root.attribute("expirationdate").unwrap_or("").into(),

@@ -130,47 +130,16 @@ fn rejects_identity_mismatch_dtd_and_directive_injection() {
 #[test]
 #[ignore = "Contacts real AirVPN bootstrap with a synthetic invalid account"]
 fn live_bootstrap_decrypts_an_explicit_account_refusal() {
-    let bootstrap = Bootstrap::eddie();
-    let params = BTreeMap::from([
-        ("act".into(), "user".into()),
-        (
-            "login".into(),
-            "wave-protocol-test-invalid-000000000000".into(),
-        ),
-        ("password".into(), "intentionally-invalid".into()),
-        ("software".into(), "WaveVPN_0.1-dev".into()),
-        ("system".into(), "Linux".into()),
-        ("arch".into(), "test".into()),
-        ("version".into(), "295".into()),
-    ]);
-    let client = reqwest::blocking::Client::builder()
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .unwrap();
-    let mut verified = false;
-    for url in bootstrap.urls.iter().take(2) {
-        let mut envelope = Envelope::new(&bootstrap).unwrap();
-        let result = client
-            .post(url)
-            .form(&envelope.encode(&params).unwrap())
-            .send();
-        let Ok(response) = result else { continue };
-        let Ok(bytes) = response.bytes() else {
-            continue;
-        };
-        let Ok(plain) = envelope.decode(&bytes) else {
-            continue;
-        };
-        let doc = roxmltree::Document::parse(&plain).unwrap();
-        let root = doc.root_element();
-        assert!(
-            !root.attribute("error").unwrap_or("").is_empty()
-                || !root.attribute("message_action").unwrap_or("").is_empty()
-        );
-        verified = true;
-        break;
-    }
-    assert!(verified, "No real bootstrap response decrypted");
+    let error = Client::with_timeout(4)
+        .unwrap()
+        .login(
+            "wave-protocol-test-invalid-000000000000",
+            "intentionally-invalid",
+        )
+        .err()
+        .expect("Synthetic account must be refused");
+    assert!(
+        error.is::<AccountRejected>(),
+        "Bootstrap did not distinguish encrypted account refusal from network failure"
+    );
 }

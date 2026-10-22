@@ -5,18 +5,41 @@ use anyhow::Result;
 use std::{path::Path, process::Command};
 
 pub fn command(executable: &Path, action: &str) -> Result<Command> {
+    command_cancellable(executable, action, || false)
+}
+pub fn command_cancellable(
+    executable: &Path,
+    action: &str,
+    cancelled: impl Fn() -> bool,
+) -> Result<Command> {
+    anyhow::ensure!(!cancelled(), "Networking action cancelled");
     #[cfg(target_os = "linux")]
     {
         if !Path::new(linux::SOCKET).exists() {
-            let status = Command::new("/usr/bin/pkexec")
+            let mut setup = Command::new("/usr/bin/pkexec")
                 .arg(executable)
                 .arg("service-install")
-                .status()?;
+                .spawn()?;
+            let start = std::time::Instant::now();
+            let status = loop {
+                if let Some(status) = setup.try_wait()? {
+                    break status;
+                }
+                if cancelled() || start.elapsed() >= std::time::Duration::from_secs(120) {
+                    let _ = setup.kill();
+                    let _ = setup.wait();
+                    anyhow::bail!(
+                        "Networking service setup cancelled or timed out; retry Connect when ready"
+                    );
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            };
             anyhow::ensure!(
                 status.success(),
                 "Networking service setup was cancelled or failed"
             );
         }
+        anyhow::ensure!(!cancelled(), "Networking action cancelled");
         let mut command = Command::new(executable);
         command.args(["service-client", action]);
         Ok(command)
@@ -192,7 +215,7 @@ mod linux {
     fn allowed(action: &str) -> bool {
         matches!(
             action,
-            "transport-worker" | "recover" | "lock-enable" | "lock-disable"
+            "transport-worker" | "recover" | "lock-enable" | "lock-disable" | "network-status"
         )
     }
     fn finish(stream: &mut UnixStream, success: bool) -> Result<()> {

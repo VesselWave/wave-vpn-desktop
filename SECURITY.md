@@ -5,15 +5,27 @@ a production support or security maintenance promise. Do not interpret a passing
 unit test or a macOS UI build as verified VPN protection. Release gates and tested
 environments are tracked in docs/PARITY.md and docs/VERIFICATION.md.
 
-Report vulnerabilities privately using the repository's **Security → Report a
-vulnerability** action when enabled. Do not post passwords, private profiles,
-WireGuard keys, account identifiers or unredacted logs in issues. If private
-reporting is unavailable, the maintainer must configure a private contact before
-release; no fallback security email is asserted here.
+Report vulnerabilities privately to **vesselwave@protonmail.com**. Include the
+app version, operating system and reproduction steps. Do not post passwords,
+private profiles, WireGuard keys, account identifiers or unredacted logs in public
+issues. This is the maintainer-designated contact; email delivery has not been
+independently tested. No response-time commitment is currently offered.
+
+Release downloads use the OpenPGP key **Wave VPN Releases
+<vesselwave@protonmail.com>**, fingerprint:
+
+```text
+4140 18C0 BBB8 C0A7 0A80 BF57 0AA3 2CCB 2C0B 3951
+```
+
+The [public key](docs/keys/wave-release-signing.asc) expires on 2028-10-21.
+See [release verification](docs/RELEASE-GATES.md). The release-signing key is for
+verifying downloads, not encrypting vulnerability reports. Private key material
+and passphrases are not part of this repository.
 
 The GUI is unprivileged. A root-owned systemd socket helper accepts only the
 authorized desktop UID (or root), checked with SO_PEERCRED. It accepts only
-transport-worker, recover, lock-enable and lock-disable, with no command paths or
+transport-worker, recover, lock-enable, lock-disable and read-only network-status, with no command paths or
 caller environment. Installing or replacing the helper requires administrator
 authorization. Helper binaries and their parent paths must be root-owned and
 not writable by other users; the authorization file is root-only. Networking
@@ -44,3 +56,18 @@ protection. Disconnect and `sudo wave-vpn recover` restore tunnel resources whil
 retaining an enabled Network Lock. Explicitly disabled protection stays off. Only explicitly turning off the **Network Lock** toggle or
 `sudo wave-vpn lock-disable` restores ordinary internet access. Reboot behavior and service ordering remain release
 gates. Do not manually delete recovery files while troubleshooting.
+
+Provider verification pins HTTPS checks to advertised AirVPN exit addresses and
+binds each request to its corresponding tunnel address. Expected internal VPN
+identity and a random system-DNS receipt must match before provider checks are
+reported verified. These checks repeat periodically, but do not establish an
+exhaustive proof against all leak timing/protocols. Missing provider metadata or
+check-service failures are not silently treated as verified. Support reports use
+an allowlisted schema with fixed failure categories; raw logs are never exported.
+
+Actual protection queries read the owned nftables table; stale/missing cached
+status, failed queries and ownership conflicts cannot establish confirmed
+protection. Setup/configuration/recovery failures stop automatic retry; monitored
+network failures eventually wait two minutes between attempts. A new worker
+repairs only Wave's recovery journal while holding the global networking lock.
+Other VPN firewall rules and resolver backups are never used as Wave state.

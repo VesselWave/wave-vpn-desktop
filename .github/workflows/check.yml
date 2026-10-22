@@ -23,6 +23,9 @@ jobs:
           sudo apt-get install -y wireguard-tools iproute2 nftables curl dbus systemd-resolved
           sudo python3 tests/linux_network.py target/release/wave-vpn
       - if: runner.os == 'Linux'
+        name: Verify release signatures and tamper rejection
+        run: python3 scripts/test-release.py
+      - if: runner.os == 'Linux'
         name: Stage install and uninstall
         run: |
           stage=$(mktemp -d)

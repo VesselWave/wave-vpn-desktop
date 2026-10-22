@@ -1,0 +1,59 @@
+minimumLimaVersion: 2.2.0
+images:
+  - location: https://download.fedoraproject.org/pub/fedora/linux/releases/44/Cloud/aarch64/images/Fedora-Cloud-Base-Generic-44-1.7.aarch64.qcow2
+    arch: aarch64
+    digest: sha256:55c60a3b80d3616a08705afd0459e75fe9f03c54aba7a46e4002a41a72fa0d5b
+vmType: vz
+arch: aarch64
+cpus: 4
+memory: 6GiB
+disk: 40GiB
+video:
+  display: vz
+mounts: []
+containerd:
+  system: false
+  user: false
+provision:
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -euxo pipefail
+      dnf --setopt=max_parallel_downloads=20 install -y @kde-desktop-environment git fish tmux vim-enhanced kitty \
+        gcc gcc-c++ pkgconf-pkg-config openssl-devel fontconfig-devel \
+        libxkbcommon-devel wayland-devel mesa-dri-drivers mesa-vulkan-drivers \
+        wireguard-tools nftables iproute polkit libsecret gnome-keyring
+      systemctl enable plasmalogin
+      # The guest account is already created by cloud-init.
+      touch /etc/plasma-setup-done
+      systemctl set-default graphical.target
+      mkdir -p /etc/plasmalogin.conf.d
+      printf '[Autologin]\nUser={{.User}}\nSession=plasma\n' > /etc/plasmalogin.conf.d/50-wave-lab.conf
+      install -d -m 700 -o '{{.User}}' '{{.Home}}/.config' '{{.Home}}/.config/wave-lab'
+      set +x
+      if [ ! -f '{{.Home}}/.config/wave-lab/login-password' ]; then
+        openssl rand -base64 24 > '{{.Home}}/.config/wave-lab/login-password'
+        chmod 600 '{{.Home}}/.config/wave-lab/login-password'
+        chown '{{.User}}' '{{.Home}}/.config/wave-lab/login-password'
+        printf '%s:%s\n' '{{.User}}' "$(cat '{{.Home}}/.config/wave-lab/login-password')" | chpasswd
+      fi
+      systemctl start graphical.target
+  - mode: user
+    script: |
+      #!/bin/bash
+      set -euxo pipefail
+      mkdir -p "$HOME/repos"
+      if [ ! -d "$HOME/repos/dotfiles/.git" ]; then
+        git clone https://github.com/VesselWave/dotfiles.git "$HOME/repos/dotfiles"
+        git -C "$HOME/repos/dotfiles" checkout c4ba9e941e40347bc3d640e65bb29bdd415a2dbc
+      fi
+      cd "$HOME/repos/dotfiles"
+      ./scripts/link fish tmux vim kitty
+probes:
+  - mode: readiness
+    description: KDE packages and dotfiles are installed
+    script: |
+      #!/bin/bash
+      set -eu
+      rpm -q plasma-workspace plasma-login-manager git >/dev/null
+      test -L "$HOME/.vimrc"

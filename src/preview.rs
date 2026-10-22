@@ -2,6 +2,7 @@
 //! Explicit demo mode for visual comparisons. No network requests or privileged operations.
 use super::*;
 pub fn setup(app: &mut Wave) {
+    app.protection_known = true;
     app.prefs = Preferences::default();
     app.draft = app.prefs.options.clone();
     app.login = "Preview account".into();
@@ -54,6 +55,15 @@ pub fn setup(app: &mut Wave) {
             app.tx_rate = 320_000.;
             app.connections = 1;
             app.guarded = true;
+        }
+        Ok("diagnostics") => {
+            app.tab = Tab::Logs;
+            let _ = app.update(Message::Diagnostics);
+        }
+        Ok("unknown") => {
+            app.protection_known = false;
+            app.tab = Tab::Settings;
+            app.section = Section::Lock;
         }
         Ok("logged-out") => {
             app.account = None;

@@ -25,6 +25,7 @@ fn authenticated_profiles_for_isolated_linux_verification() -> Result<()> {
             requests.push(Request {
                 profile,
                 options: Options::default(),
+                checks: manifest.provider_check(server),
             });
             println!(
                 "Selected public server {} for live verification",

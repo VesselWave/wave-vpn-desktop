@@ -17,6 +17,7 @@ import tempfile
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--vm', required=True, help='Disposable Lima Linux VM')
+    parser.add_argument('--negative-only', action='store_true', help='Run protected bootstrap, negative provider checks and packet capture only')
     parser.add_argument('--guest-binary', required=True, help='Absolute Linux wave-vpn binary path')
     parser.add_argument('--guest-repo', help='Repository path mounted in the guest (defaults to host path)')
     parser.add_argument('--env-file', type=Path, help='Private credentials file (default: repository .env)')
@@ -47,7 +48,7 @@ def main():
         subprocess.run(['cargo', 'test', '--manifest-path', str(repo / 'Cargo.toml'), '--locked', '--test', 'authenticated', '--', '--ignored', '--nocapture'], input=credential_json, env=env, check=True, timeout=180)
         guest_repo = args.guest_repo or str(repo)
         with requests.open('rb') as private:
-            subprocess.run(['limactl', 'shell', args.vm, '--', 'sudo', 'env', 'WAVE_LIVE_TEST_VM=1', 'python3', guest_repo + '/tests/live_linux.py', args.guest_binary], stdin=private, check=True, timeout=510)
+            subprocess.run(['limactl', 'shell', args.vm, '--', 'sudo', 'env', 'WAVE_LIVE_TEST_VM=1', *(['WAVE_LIVE_NEGATIVE_ONLY=1'] if args.negative_only else []), 'python3', guest_repo + '/tests/live_linux.py', args.guest_binary], stdin=private, check=True, timeout=510)
 
 
 if __name__ == '__main__':

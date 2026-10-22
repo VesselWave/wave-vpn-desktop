@@ -40,6 +40,8 @@ enum Action {
     },
     #[command(hide = true)]
     TransportWorker,
+    /// Query actual firewall and recovery state without changing networking.
+    NetworkStatus,
     /// Install/upgrade the networking service for the invoking desktop user.
     ServiceInstall {
         #[arg(long)]
@@ -75,6 +77,7 @@ fn main() -> Result<()> {
             Ok(())
         }
         Action::TransportWorker => transport::worker(),
+        Action::NetworkStatus => transport::network_status(),
         Action::ServiceInstall { uid } => service::install(uid),
         Action::ServiceUninstall => service::uninstall(),
         Action::ServiceServe => service::serve(),

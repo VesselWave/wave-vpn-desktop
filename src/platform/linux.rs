@@ -157,8 +157,8 @@ fn read_private(path: &str) -> Result<Option<Vec<u8>>> {
 fn lock_config() -> Result<Option<LockConfig>> {
     read_private(LOCK_CONFIG)?
         .map(|b| {
-            let c: LockConfig = serde_json::from_slice(&b)
-                .context("Invalid persistent lock configuration; protection retained")?;
+            let c: LockConfig =
+                serde_json::from_slice(&b).context("Invalid persistent lock configuration")?;
             c.options.validate()?;
             Ok(c)
         })
@@ -180,16 +180,60 @@ fn family(cidr: &str) -> &'static str {
     }
 }
 fn owned_firewall() -> Result<bool> {
-    match run("nft", &["list", "table", "inet", "wave_vpn"], None) {
-        Ok(text) => {
-            ensure!(
-                text.contains("Managed by Wave VPN"),
-                "A foreign table uses Wave's firewall name"
-            );
-            Ok(true)
-        }
-        Err(_) => Ok(false),
+    // A failed nft query is unknown, never proof that protection is off.
+    let tables: serde_json::Value =
+        serde_json::from_str(&run("nft", &["-j", "list", "tables"], None)?)?;
+    let entries = tables["nftables"]
+        .as_array()
+        .context("Invalid firewall status")?;
+    if !entries
+        .iter()
+        .any(|v| v["table"]["family"] == "inet" && v["table"]["name"] == "wave_vpn")
+    {
+        return Ok(false);
     }
+    let table: serde_json::Value = serde_json::from_str(&run(
+        "nft",
+        &["-j", "list", "table", "inet", "wave_vpn"],
+        None,
+    )?)?;
+    crate::protection::table_enabled(&table)?;
+    Ok(true)
+}
+fn actual_protection() -> Result<bool> {
+    if !owned_firewall()? {
+        return Ok(false);
+    }
+    let table = serde_json::from_str(&run(
+        "nft",
+        &["-j", "list", "table", "inet", "wave_vpn"],
+        None,
+    )?)?;
+    crate::protection::table_enabled(&table)
+}
+pub fn network_status() -> Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+    root()?;
+    let mut status = crate::protection::Status {
+        enabled: actual_protection().ok(),
+        persistent: persistent()?,
+        ..Default::default()
+    };
+    status.recovery_needed = read_private(&format!("{DIR}/recovery.json"))?.is_some()
+        || Path::new(CONFIG).exists()
+        || run("ip", &["link", "show", "dev", IFACE], None).is_ok();
+    if let Ok(lock) = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(format!("{DIR}/worker.lock"))
+    {
+        status.worker_active = fs2::FileExt::try_lock_exclusive(&lock).is_err();
+    }
+    println!(
+        "{}",
+        serde_json::json!({"event":"network_status", "status":status})
+    );
+    Ok(())
 }
 fn set_firewall(o: &Options, p: Option<&TunnelProfile>, locked: bool) -> Result<()> {
     let mut batch = String::new();
@@ -259,6 +303,10 @@ fn configure(r: &Request, touched: &mut bool) -> Result<()> {
     }
     for name in ["wg", "ip", "nft"] {
         tool(name)?;
+    }
+    if r.checks.is_some() && !o.on("verify") {
+        // Missing verification tooling is setup failure, not an endless network retry.
+        tool("getent")?;
     }
     let resolved = run("resolvectl", &["status"], None).is_ok();
     // Ubuntu's resolvconf may be a compatibility symlink to resolvectl. Its
@@ -595,7 +643,7 @@ fn cleanup(o: &Options, retain: bool) -> Result<()> {
     // Retain the kill switch and recovery record if restoring networking failed.
     ensure!(
         errors.is_empty(),
-        "Recovery incomplete; protection retained: {}",
+        "Recovery incomplete: {}",
         errors.join("; ")
     );
     if let Some(c) = configured_lock.filter(|c| c.enabled) {
@@ -639,31 +687,129 @@ fn verify_routes(r: &Request) -> Result<()> {
     }
     Ok(())
 }
-fn verify_tunnel(r: &Request) -> Result<()> {
+fn publish_checks(results: &crate::checks::Results) {
+    println!(
+        "{}",
+        serde_json::json!({"event":"checks", "results":results})
+    );
+}
+fn verify_tunnel(r: &Request, stop: &AtomicBool) -> Result<()> {
+    use crate::checks::{Outcome, Results};
+    let mut results = Results::default();
+    publish_checks(&results);
     verify_routes(r)?;
     if r.options.on("verify") {
+        publish_checks(&results);
         return Ok(());
     }
-    let ip = r
-        .profile
-        .addresses
-        .iter()
-        .find_map(|a| a.split('/').next()?.parse::<std::net::IpAddr>().ok())
-        .context("Tunnel address missing")?;
-    reqwest::blocking::Client::builder()
-        .no_proxy()
-        .local_address(ip)
-        .timeout(Duration::from_secs(r.options.number("http_timeout")))
-        .build()?
-        .get("https://airvpn.org/")
-        .send()?
-        .error_for_status()?;
+    let timeout = Duration::from_secs(r.options.number("http_timeout").min(5));
+    if let Some(check) = &r.checks {
+        check.validate()?;
+        for address in &r.profile.addresses {
+            if stop.load(Ordering::Relaxed) {
+                return Ok(());
+            }
+            let ip: std::net::IpAddr = address
+                .split('/')
+                .next()
+                .context("Tunnel address missing")?
+                .parse()?;
+            let outcome = if ip.is_ipv6() {
+                &mut results.ipv6
+            } else {
+                &mut results.ipv4
+            };
+            let client = match check.client(ip, timeout) {
+                Ok(client) => client,
+                Err(_) => {
+                    *outcome = Outcome::Unavailable;
+                    publish_checks(&results);
+                    bail!("Provider check unavailable for a configured IP family");
+                }
+            };
+            match check.fetch(&client, "tun") {
+                Ok(response) => {
+                    if crate::checks::verify_ip(&response, ip).is_err() {
+                        *outcome = Outcome::Failed;
+                        publish_checks(&results);
+                        bail!("VPN exit identity check failed");
+                    }
+                    *outcome = Outcome::Verified;
+                }
+                Err(_) => {
+                    *outcome = Outcome::Unavailable;
+                    publish_checks(&results);
+                    bail!("VPN internet/exit check unavailable");
+                }
+            }
+            publish_checks(&results);
+        }
+        if stop.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        let token = format!("{:032x}", rand::random::<u128>());
+        let host = check.dns_query.replace("{hash}", &token);
+        // The system resolver must see the random challenge. An NXDOMAIN can
+        // still be correct: the provider receipt, not getent's exit code, proves it.
+        let _ = crate::process::output(
+            Command::new(tool("getent")?)
+                .args(["ahosts", &host])
+                .env_clear()
+                .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin"),
+            None,
+            timeout,
+        );
+        if stop.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        let ip: std::net::IpAddr = r.profile.addresses[0].split('/').next().unwrap().parse()?;
+        let client = check.client(ip, timeout)?;
+        match check.fetch(&client, "dns") {
+            Ok(response) if crate::checks::verify_dns(&response, &token).is_ok() => {
+                results.dns = Outcome::Verified
+            }
+            Ok(_) => {
+                results.dns = Outcome::Failed;
+                publish_checks(&results);
+                bail!("System DNS verification failed; use Recover and retry");
+            }
+            Err(_) => {
+                results.dns = Outcome::Unavailable;
+                publish_checks(&results);
+                bail!("DNS check service unavailable");
+            }
+        }
+    } else {
+        // Generic/local peers have no provider challenge; never label DNS verified.
+        for address in &r.profile.addresses {
+            if stop.load(Ordering::Relaxed) {
+                return Ok(());
+            }
+            let ip: std::net::IpAddr = address
+                .split('/')
+                .next()
+                .context("Tunnel address missing")?
+                .parse()?;
+            reqwest::blocking::Client::builder()
+                .no_proxy()
+                .local_address(ip)
+                .timeout(timeout)
+                .build()?
+                .get("https://airvpn.org/")
+                .send()?
+                .error_for_status()?;
+        }
+    }
+    publish_checks(&results);
     Ok(())
 }
 fn monitor(r: &mut Request, stop: &AtomicBool, changes: &mpsc::Receiver<bool>) -> Result<()> {
     let start = Instant::now();
     let mut connected = false;
     let mut stalled = false;
+    let mut checked = Instant::now();
+    let mut last_wall = std::time::SystemTime::now();
+    let mut last_tick = Instant::now();
     // Generate traffic even when keepalive is disabled, to initiate the handshake.
     for dns in &r.profile.dns {
         if let Ok(ip) = dns.parse::<std::net::IpAddr>() {
@@ -697,6 +843,27 @@ fn monitor(r: &mut Request, stop: &AtomicBool, changes: &mpsc::Receiver<bool>) -
                 serde_json::json!({"event":"protection","enabled":enabled})
             );
         }
+        let wall = std::time::SystemTime::now();
+        if connected
+            && crate::lifecycle::resumed(
+                wall.duration_since(last_wall).unwrap_or_default(),
+                last_tick.elapsed(),
+            )
+        {
+            bail!("System resumed or networking paused; reconnect required");
+        }
+        if connected && checked.elapsed() >= Duration::from_secs(60) {
+            println!(
+                "{}",
+                serde_json::json!({"event":"state","state":"checking"})
+            );
+            verify_tunnel(r, stop)?;
+            checked = Instant::now();
+            println!(
+                "{}",
+                serde_json::json!({"event":"state","state":"connected"})
+            );
+        }
         let s = stats()?;
         if s.handshake > 0 && !connected {
             let mut verified = false;
@@ -704,7 +871,7 @@ fn monitor(r: &mut Request, stop: &AtomicBool, changes: &mpsc::Receiver<bool>) -
                 if stop.load(Ordering::Relaxed) {
                     return Ok(());
                 }
-                match verify_tunnel(r) {
+                match verify_tunnel(r, stop) {
                     Ok(()) => {
                         verified = true;
                         break;
@@ -714,7 +881,11 @@ fn monitor(r: &mut Request, stop: &AtomicBool, changes: &mpsc::Receiver<bool>) -
                 std::thread::sleep(Duration::from_secs(1));
             }
             ensure!(verified, "Tunnel verification failed");
+            if stop.load(Ordering::Relaxed) {
+                return Ok(());
+            }
             connected = true;
+            checked = Instant::now();
             println!("{}", serde_json::json!({"event":"connected"}));
         }
         if !connected {
@@ -743,6 +914,9 @@ fn monitor(r: &mut Request, stop: &AtomicBool, changes: &mpsc::Receiver<bool>) -
             serde_json::json!({"event":"stats","rx":s.rx,"tx":s.tx})
         );
         std::io::stdout().flush()?;
+        // Exclude our own bounded verification work from suspend detection.
+        last_wall = std::time::SystemTime::now();
+        last_tick = Instant::now();
         std::thread::sleep(Duration::from_secs(1));
     }
 }
@@ -798,6 +972,14 @@ pub fn worker() -> Result<()> {
     let mut r = parsed?;
     r.options.validate()?;
     r.profile.apply_options(&r.options)?;
+    if let Some(check) = &r.checks {
+        check.validate()?;
+    }
+    // The global operation lock proves there is no live worker. Repair only
+    // our journaled resources before a new attempt, keeping confirmed protection.
+    if read_private(&format!("{DIR}/recovery.json"))?.is_some() {
+        cleanup(&r.options, actual_protection()? || persistent()?)?;
+    }
     let stop = Arc::new(AtomicBool::new(false));
     for sig in [signal_hook::consts::SIGTERM, signal_hook::consts::SIGINT] {
         signal_hook::flag::register(sig, stop.clone())?;
@@ -826,24 +1008,29 @@ pub fn worker() -> Result<()> {
         eof.store(true, Ordering::Relaxed);
     });
     let mut touched = false;
-    let result = configure(&r, &mut touched).and_then(|_| monitor(&mut r, &stop, &changes));
+    let configured = configure(&r, &mut touched);
+    let retryable = configured.is_ok();
+    let result = configured.and_then(|_| monitor(&mut r, &stop, &changes));
     if touched {
-        cleanup(&r.options, r.options.on("netlock"))?;
+        if let Err(error) = cleanup(&r.options, r.options.on("netlock")) {
+            println!(
+                "{}",
+                serde_json::json!({"event":"failure", "retryable":false, "category":"recovery"})
+            );
+            return Err(error);
+        }
+    }
+    if result.is_err() {
+        println!(
+            "{}",
+            serde_json::json!({"event":"failure", "retryable":retryable, "category":if retryable {"connection"} else {"configuration"}})
+        );
     }
     result
 }
 pub fn recover() -> Result<()> {
     let _guard = exclusive()?;
-    let retain = if owned_firewall()? {
-        run(
-            "nft",
-            &["list", "chain", "inet", "wave_vpn", "output"],
-            None,
-        )?
-        .contains("policy drop;")
-    } else {
-        false
-    };
+    let retain = actual_protection()?;
     cleanup(&Options::default(), retain)?;
     println!(
         "Tunnel resources restored; Network Lock {}",

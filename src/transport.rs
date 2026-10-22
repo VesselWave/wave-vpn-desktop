@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 pub struct Request {
     pub profile: TunnelProfile,
     pub options: Options,
+    #[serde(default)]
+    pub checks: Option<crate::checks::ProviderCheck>,
 }
 #[derive(Default)]
 pub struct Stats {
@@ -30,7 +32,7 @@ pub fn parse_stats(text: &str) -> Result<Stats> {
 #[path = "platform/linux.rs"]
 mod backend;
 #[cfg(target_os = "linux")]
-pub use backend::{lock_action, recover, worker};
+pub use backend::{lock_action, network_status, recover, worker};
 #[cfg(not(target_os = "linux"))]
 pub fn worker() -> Result<()> {
     anyhow::bail!("VPN connections require a platform backend; currently Linux is supported")
@@ -42,4 +44,9 @@ pub fn recover() -> Result<()> {
 #[cfg(not(target_os = "linux"))]
 pub fn lock_action(_action: &str) -> Result<()> {
     anyhow::bail!("Persistent network lock is currently supported on Linux")
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn network_status() -> Result<()> {
+    anyhow::bail!("Network status requires Linux")
 }

@@ -90,6 +90,11 @@ enum Message {
     Sort(Sort),
     Filter(Level),
     Clear,
+    Diagnostics,
+    DiagnosticsClose,
+    DiagnosticsPath(String),
+    DiagnosticsCopy,
+    DiagnosticsSave,
     Section(Section),
     Option(&'static str, String),
     Save,
@@ -124,6 +129,8 @@ enum Event {
     Line(String),
     End(String),
     Notice(Result<String, String>),
+    NetworkStatus(u64, Result<wave_protocol::protection::Status, String>),
+    DiagnosticsSaved(Result<(), String>),
 }
 #[derive(Default)]
 struct WorkerControl {
@@ -155,6 +162,17 @@ struct Wave {
     penalties: BTreeMap<String, Instant>,
     session_server: Option<String>,
     guarded: bool,
+    protection_known: bool,
+    protection: wave_protocol::protection::Status,
+    status_pending: bool,
+    network_revision: u64,
+    status_checked: Instant,
+    checks: wave_protocol::checks::Results,
+    retryable: bool,
+    retry_attempts: u32,
+    diagnostics: Option<String>,
+    diagnostics_path: String,
+    last_failure: wave_protocol::diagnostics::Failure,
     window: Option<iced::window::Id>,
     tray: Option<tray::Handle>,
     login: String,
@@ -217,6 +235,17 @@ impl Wave {
             penalties: BTreeMap::new(),
             session_server: None,
             guarded: false,
+            protection_known: false,
+            protection: Default::default(),
+            status_pending: false,
+            network_revision: 0,
+            status_checked: Instant::now() - Duration::from_secs(10),
+            checks: Default::default(),
+            retryable: false,
+            retry_attempts: 0,
+            diagnostics: None,
+            diagnostics_path: String::new(),
+            last_failure: Default::default(),
             window: None,
             tray: None,
             login: String::new(),
@@ -412,6 +441,37 @@ impl Wave {
             Message::Tick => {
                 while let Ok(e) = self.events.try_recv() {
                     match e {
+                        Event::DiagnosticsSaved(result) => match result {
+                            Ok(()) => {
+                                self.error = None;
+                                self.log(Level::Info, "Diagnostic report saved".into());
+                            }
+                            Err(error) => {
+                                self.last_failure = wave_protocol::diagnostics::Failure::Export;
+                                self.error = Some(error);
+                            }
+                        },
+                        Event::NetworkStatus(revision, result) => {
+                            self.status_pending = false;
+                            if revision != self.network_revision {
+                                continue;
+                            }
+                            self.status_checked = Instant::now();
+                            match result {
+                                Ok(status) => {
+                                    self.protection_known = status.enabled.is_some();
+                                    if let Some(enabled) = status.enabled {
+                                        self.guarded = enabled;
+                                    }
+                                    self.persistent_lock = status.persistent;
+                                    self.protection = status;
+                                }
+                                Err(_) => {
+                                    self.protection_known = false;
+                                    self.protection.enabled = None;
+                                }
+                            }
+                        }
                         Event::TrayReady(handle) => self.tray = handle,
                         Event::Tray(action) => {
                             let message = match action {
@@ -437,6 +497,7 @@ impl Wave {
                             }
                             self.busy = false;
                             self.refreshing = false;
+                            self.last_refresh = Instant::now();
                             match *result {
                                 Ok((a, m)) => {
                                     let first = self.account.is_none();
@@ -467,6 +528,11 @@ impl Wave {
                                     }
                                 }
                                 Err(e) => {
+                                    self.last_failure = if e.contains("rejected") {
+                                        wave_protocol::diagnostics::Failure::AccountRejected
+                                    } else {
+                                        wave_protocol::diagnostics::Failure::SignInNetwork
+                                    };
                                     self.error = Some(e.clone());
                                     self.log(Level::Error, e);
                                     if self.account.is_none() {
@@ -512,6 +578,9 @@ impl Wave {
                                     self.busy = false;
                                     self.refreshing = false;
                                     self.retry_at = None;
+                                    self.retry_attempts = 0;
+                                    self.status = "Disconnected".into();
+                                    self.checks = Default::default();
                                     self.session_server = None;
                                     self.account = None;
                                     self.manifest = None;
@@ -559,6 +628,7 @@ impl Wave {
                                 .as_ref()
                                 .is_some_and(|c| c.lock().unwrap().cancelled);
                             let retry = !message.is_empty()
+                                && self.retryable
                                 && !cancelled
                                 && self.prefs.options.on("reconnect");
                             if let Some(server) = &self.active_server {
@@ -570,10 +640,17 @@ impl Wave {
                             }
                             self.retry_at = retry.then(|| {
                                 Instant::now()
-                                    + Duration::from_secs(
-                                        self.prefs.options.number("penalty").max(1),
-                                    )
+                                    + wave_protocol::lifecycle::retry_delay(self.retry_attempts)
                             });
+                            if retry {
+                                self.retry_attempts = self.retry_attempts.saturating_add(1);
+                            }
+                            self.protection_known = false;
+                            self.status_checked = Instant::now() - Duration::from_secs(10);
+                            if !message.is_empty() {
+                                self.last_failure = wave_protocol::diagnostics::Failure::Connection;
+                            }
+                            self.network_revision = self.network_revision.wrapping_add(1);
                             self.control = None;
                             if self.switching && message.is_empty() {
                                 self.switching = false;
@@ -593,6 +670,8 @@ impl Wave {
                             self.rx_rate = 0.;
                             self.tx_rate = 0.;
                             if !message.is_empty() {
+                                let message =
+                                    self.checks.issue().map(str::to_owned).unwrap_or(message);
                                 self.error = Some(message.clone());
                                 self.log(Level::Error, message);
                             } else {
@@ -601,6 +680,8 @@ impl Wave {
                         }
                         Event::Notice(result) => {
                             self.network_busy = false;
+                            self.protection_known = false;
+                            self.status_checked = Instant::now() - Duration::from_secs(10);
                             if result.is_err() {
                                 self.lock_change = None;
                             }
@@ -611,6 +692,8 @@ impl Wave {
                                     }
                                 }
                                 Err(e) => {
+                                    self.last_failure =
+                                        wave_protocol::diagnostics::Failure::Recovery;
                                     self.error = Some(e.clone());
                                     self.log(Level::Error, e);
                                 }
@@ -631,16 +714,19 @@ impl Wave {
                 if self.preview {
                     return preview::tick(self);
                 }
-                if let Ok(text) = std::fs::read_to_string("/run/wave-vpn-lock-status.json") {
-                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
-                        self.persistent_lock = v["enabled"].as_bool().unwrap_or(false);
-                        self.lock_installed = v["installed"].as_bool().unwrap_or(false);
-                    }
+                if self.status_checked.elapsed() >= Duration::from_secs(15) {
+                    self.protection_known = false;
+                    self.protection.enabled = None;
                 }
-                if let Ok(text) = std::fs::read_to_string("/run/wave-vpn-protection.json") {
-                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
-                        self.guarded = v["enabled"].as_bool().unwrap_or(false);
-                    }
+                if !self.status_pending && self.status_checked.elapsed() >= Duration::from_secs(5) {
+                    self.query_status();
+                }
+                if self
+                    .since
+                    .is_some_and(|t| t.elapsed() >= Duration::from_secs(60))
+                    && self.status == "Connected"
+                {
+                    self.retry_attempts = 0;
                 }
                 if self.retry_at.is_some_and(|t| Instant::now() >= t) && self.control.is_none() {
                     self.retry_at = None;
@@ -694,7 +780,7 @@ impl Wave {
                 std::thread::spawn(move || {
                     let r = Client::with_timeout(timeout)
                         .and_then(|c| c.login(&login, &password))
-                        .map_err(|_| "Sign-in failed. Check your account and network.".into());
+                        .map_err(|error| wave_protocol::sign_in_error(&error));
                     password.zeroize();
                     let _ = tx.send(Event::Login(epoch, Box::new(r)));
                 });
@@ -745,6 +831,50 @@ impl Wave {
                 }
             }
             Message::Clear => self.logs.clear(),
+            Message::Diagnostics => {
+                let context = wave_protocol::diagnostics::Context {
+                    connected: self.since.is_some() && self.status == "Connected",
+                    reconnecting: self.retry_at.is_some(),
+                    protection: self.protection.clone(),
+                    checks: self.checks.clone(),
+                    last_failure: self.last_failure,
+                };
+                self.diagnostics = Some(
+                    serde_json::to_string_pretty(&wave_protocol::diagnostics::report(&context))
+                        .unwrap(),
+                );
+                self.diagnostics_path = std::env::var_os("HOME")
+                    .map(std::path::PathBuf::from)
+                    .filter(|path| path.is_absolute() && path.is_dir())
+                    .unwrap_or_else(std::env::temp_dir)
+                    .join(format!(
+                        "diagnostics-{}.json",
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs()
+                    ))
+                    .to_string_lossy()
+                    .into();
+            }
+            Message::DiagnosticsClose => self.diagnostics = None,
+            Message::DiagnosticsPath(path) => self.diagnostics_path = path,
+            Message::DiagnosticsCopy => {
+                if let Some(report) = &self.diagnostics {
+                    return iced::clipboard::write(report.clone());
+                }
+            }
+            Message::DiagnosticsSave => {
+                if let Some(report) = &self.diagnostics {
+                    let report: serde_json::Value = serde_json::from_str(report).unwrap();
+                    let path = std::path::PathBuf::from(&self.diagnostics_path);
+                    let tx = self.sender.clone();
+                    std::thread::spawn(move || {
+                        let result = wave_protocol::diagnostics::export_report(&path, &report).map_err(|_| "Could not save report. Choose a new writable filename; existing files are never overwritten.".into());
+                        let _ = tx.send(Event::DiagnosticsSaved(result));
+                    });
+                }
+            }
             Message::Option(key, value) => self.draft.set(key, value),
             Message::Save => match self.draft.validate() {
                 Ok(()) => {
@@ -755,6 +885,7 @@ impl Wave {
                 Err(e) => self.error = Some(e.to_string()),
             },
             Message::Refresh => self.refresh(),
+            Message::Connect if self.network_busy && self.control.is_none() => return Task::none(),
             Message::Connect if self.control.is_some() && !self.preview => {
                 self.switching = true;
                 self.retry_at = None;
@@ -772,6 +903,13 @@ impl Wave {
                 }
                 match self.profile() {
                     Ok(profile) => {
+                        self.network_revision = self.network_revision.wrapping_add(1);
+                        self.checks = Default::default();
+                        self.retryable = false;
+                        let checks = self
+                            .manifest
+                            .as_ref()
+                            .and_then(|m| self.selected().and_then(|s| m.provider_check(s)));
                         let control = Arc::new(Mutex::new(WorkerControl::default()));
                         self.control = Some(control.clone());
                         self.status = "Connecting…".into();
@@ -785,7 +923,8 @@ impl Wave {
                         let tx = self.sender.clone();
                         let options = self.prefs.options.clone();
                         std::thread::spawn(move || {
-                            let result = launch_transport(profile, options, control, tx.clone());
+                            let result =
+                                launch_transport(profile, options, checks, control, tx.clone());
                             let _ = tx.send(Event::End(
                                 result.err().map(|e| e.to_string()).unwrap_or_default(),
                             ));
@@ -795,6 +934,10 @@ impl Wave {
                 }
             }
             Message::Disconnect => {
+                self.retry_attempts = 0;
+                if self.control.is_none() {
+                    self.status = "Disconnected".into();
+                }
                 self.switching = false;
                 self.retry_at = None;
                 self.session_server = None;
@@ -929,6 +1072,34 @@ impl Wave {
             let _ = tx.send(Event::Pings(pings));
         });
     }
+    fn query_status(&mut self) {
+        self.status_pending = true;
+        let revision = self.network_revision;
+        let tx = self.sender.clone();
+        std::thread::spawn(move || {
+            let result = (|| -> anyhow::Result<wave_protocol::protection::Status> {
+                let executable = std::env::current_exe()?.with_file_name("wave-vpn");
+                // Read-only query: never install the helper or prompt for a password.
+                let output = wave_protocol::process::output(
+                    std::process::Command::new(executable)
+                        .args(["service-client", "network-status"]),
+                    None,
+                    Duration::from_secs(8),
+                )?;
+                anyhow::ensure!(output.status.success(), "Networking status unavailable");
+                for line in output.stdout.split(|b| *b == b'\n') {
+                    if let Ok(value) = serde_json::from_slice::<serde_json::Value>(line) {
+                        if value["event"] == "network_status" {
+                            return Ok(serde_json::from_value(value["status"].clone())?);
+                        }
+                    }
+                }
+                anyhow::bail!("Networking status unavailable")
+            })()
+            .map_err(|_| "Networking status unavailable".into());
+            let _ = tx.send(Event::NetworkStatus(revision, result));
+        });
+    }
     fn refresh(&mut self) {
         if self.preview || self.refreshing || self.account.is_none() {
             return;
@@ -949,8 +1120,21 @@ impl Wave {
     }
     fn transport_line(&mut self, line: String) {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) {
+            if v["event"] == "failure" {
+                self.retryable = v["retryable"] == true;
+                return;
+            }
+            if v["event"] == "checks" {
+                if let Ok(results) = serde_json::from_value(v["results"].clone()) {
+                    self.checks = results;
+                }
+                return;
+            }
             if v["event"] == "protection" {
+                self.network_revision = self.network_revision.wrapping_add(1);
+                self.protection_known = true;
                 self.guarded = v["enabled"].as_bool().unwrap_or(false);
+                self.protection.enabled = Some(self.guarded);
                 if self.lock_change == Some(self.guarded) {
                     self.lock_change = None;
                     self.network_busy = false;
@@ -961,12 +1145,15 @@ impl Wave {
                 return;
             }
             if v["event"] == "state" {
-                self.status = if v["state"] == "stalled" {
-                    "Stalled"
-                } else {
-                    "Connected"
+                self.status = match v["state"].as_str() {
+                    Some("stalled") => "Stalled",
+                    Some("checking") => "Checking connection…",
+                    _ => "Connected",
                 }
                 .into();
+                if self.status == "Stalled" {
+                    self.checks = Default::default();
+                }
                 return;
             }
             if v["event"] == "stats" {
@@ -1038,6 +1225,7 @@ impl Wave {
         });
     }
     fn privileged(&mut self, action: &'static str) {
+        self.network_revision = self.network_revision.wrapping_add(1);
         if self.preview {
             self.error = Some("Privileged actions are disabled in preview mode".into());
             return;
@@ -1114,6 +1302,7 @@ impl Drop for Wave {
 fn launch_transport(
     profile: TunnelProfile,
     options: Options,
+    checks: Option<wave_protocol::checks::ProviderCheck>,
     control: Arc<Mutex<WorkerControl>>,
     tx: mpsc::Sender<Event>,
 ) -> anyhow::Result<()> {
@@ -1122,13 +1311,20 @@ fn launch_transport(
         executable.is_file(),
         "Build/install wave-vpn beside the GUI"
     );
-    let mut child = wave_protocol::service::command(&executable, "transport-worker")?
+    let mut child =
+        wave_protocol::service::command_cancellable(&executable, "transport-worker", || {
+            control.lock().unwrap().cancelled
+        })?
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
     let mut input = child.stdin.take().unwrap();
-    let mut bytes = serde_json::to_vec(&wave_protocol::transport::Request { profile, options })?;
+    let mut bytes = serde_json::to_vec(&wave_protocol::transport::Request {
+        profile,
+        options,
+        checks,
+    })?;
     bytes.push(b'\n');
     let result = input.write_all(&bytes);
     bytes.zeroize();
@@ -1197,4 +1393,61 @@ fn main() -> iced::Result {
         .font(include_bytes!("../resources/fonts/Geist-SemiBold.ttf").as_slice())
         .font(include_bytes!("../resources/fonts/GeistMono-Regular.ttf").as_slice())
         .run()
+}
+
+#[cfg(test)]
+mod safety_tests {
+    use super::*;
+    fn app() -> Wave {
+        let mut app = Wave::new();
+        app.preview = true;
+        app.prefs.options = Options::default();
+        app
+    }
+    #[test]
+    fn retry_is_cancellable_and_failed_session_cannot_stay_connected() {
+        let mut app = app();
+        app.status = "Connected".into();
+        app.since = Some(Instant::now());
+        app.retryable = true;
+        app.sender
+            .send(Event::End("Connection ended".into()))
+            .unwrap();
+        let _ = app.update(Message::Tick);
+        assert_eq!(app.status, "Reconnecting…");
+        assert!(app.since.is_none() && app.retry_at.is_some());
+        let _ = app.update(Message::Disconnect);
+        assert!(app.retry_at.is_none());
+        assert_eq!(app.status, "Disconnected");
+    }
+    #[test]
+    fn setup_errors_do_not_loop_and_stale_queries_cannot_override_confirmed_lock() {
+        let mut app = app();
+        app.retryable = false;
+        app.sender
+            .send(Event::End("Helper setup cancelled".into()))
+            .unwrap();
+        let _ = app.update(Message::Tick);
+        assert!(app.retry_at.is_none());
+        app.transport_line(r#"{"event":"protection","enabled":true}"#.into());
+        app.sender
+            .send(Event::NetworkStatus(
+                0,
+                Ok(wave_protocol::protection::Status {
+                    enabled: Some(false),
+                    ..Default::default()
+                }),
+            ))
+            .unwrap();
+        let _ = app.update(Message::Tick);
+        assert!(app.guarded && app.protection_known);
+        app.sender
+            .send(Event::NetworkStatus(
+                app.network_revision,
+                Err("Service unavailable".into()),
+            ))
+            .unwrap();
+        let _ = app.update(Message::Tick);
+        assert!(!app.protection_known && app.protection.enabled.is_none());
+    }
 }

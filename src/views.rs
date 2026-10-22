@@ -112,7 +112,9 @@ pub fn shell(app: &Wave) -> Element<'_, Message> {
                 12.,
                 Ink::Muted
             ),
-            text(if lock_on {
+            text(if !app.protection_known {
+                "Lock status unknown"
+            } else if lock_on {
                 "Network lock on"
             } else {
                 "Network lock off"
@@ -193,11 +195,15 @@ pub fn shell(app: &Wave) -> Element<'_, Message> {
         .width(if rail { 56. } else { 196. })
         .height(Fill)
         .style(theme::sidebar);
-    let content = match app.tab {
-        Tab::Overview => overview(app),
-        Tab::Servers => servers(app),
-        Tab::Logs => logs(app),
-        Tab::Settings => settings(app),
+    let content = if app.diagnostics.is_some() {
+        diagnostics(app)
+    } else {
+        match app.tab {
+            Tab::Overview => overview(app),
+            Tab::Servers => servers(app),
+            Tab::Logs => logs(app),
+            Tab::Settings => settings(app),
+        }
     };
     let mut main = column![].spacing(16);
     if app.prefs.options.on("show_errors") {
@@ -324,6 +330,29 @@ fn overview(app: &Wave) -> Element<'_, Message> {
                 ));
             }
         }
+    }
+    if app.control.is_some() || connected || app.checks.issue().is_some() {
+        center = center.push(
+            text(format!(
+                "IPv4: {} · IPv6: {} · DNS: {}",
+                app.checks.ipv4.label(),
+                app.checks.ipv6.label(),
+                app.checks.dns.label()
+            ))
+            .size(12)
+            .style(theme::muted),
+        );
+    }
+    if app.protection.worker_active && app.control.is_none() {
+        center = center.push(text("Another Wave networking operation is active. Finish it before connecting or recovering.").size(13).style(theme::warning));
+    }
+    if app.protection.recovery_needed && app.control.is_none() {
+        center = center.push(text("A previous Wave connection needs cleanup. Use Recover before reconnecting; Network Lock is retained.").size(13).style(theme::warning));
+    }
+    if !app.protection_known {
+        center = center.push(text("Protection status is unavailable. No protection claim is made until the networking service confirms it.").size(12).style(theme::muted));
+    } else if app.guarded && !connected {
+        center = center.push(text("Internet is blocked by Network Lock. AirVPN sign-in remains allowed. Turn Network Lock off explicitly to restore ordinary internet.").size(12).style(theme::muted));
     }
     if connected {
         let cell = |label: &'static str, val: String| {
@@ -897,6 +926,7 @@ fn logs(app: &Wave) -> Element<'_, Message> {
         row![
             filters,
             Space::new().width(Fill),
+            link("Support report", Message::Diagnostics),
             link("Clear", Message::Clear)
         ]
         .align_y(Alignment::Center),
@@ -1126,6 +1156,7 @@ fn settings(app: &Wave) -> Element<'_, Message> {
         ));
     }
     if app.section == Section::Lock {
+        body = body.push(text(if app.persistent_lock { "Boot-persistent Network Lock is enabled." } else { "Session Network Lock survives app exit, but does not survive reboot. The networking helper does not enable boot protection." }).size(12).style(theme::muted));
         let available = !app.network_busy
             && !app.preview
             && app
@@ -1138,22 +1169,20 @@ fn settings(app: &Wave) -> Element<'_, Message> {
                 "Block traffic outside VPN",
                 if app.network_busy {
                     "Updating…"
+                } else if !app.protection_known {
+                    "Status unknown. Enable protection or explicitly disable it; a saved preference is not confirmation."
                 } else if app.guarded {
                     "Stays on when you disconnect. Turn off to restore internet access."
                 } else {
                     "Off. Internet access is available without the VPN."
                 },
-                toggler(app.guarded)
-                    .size(20)
-                    .style(theme::toggle)
-                    .on_toggle_maybe(available.then_some(|enabled| {
-                        Message::LockAction(if enabled {
-                            "lock-enable"
-                        } else {
-                            "lock-disable"
-                        })
-                    }))
-                    .into(),
+                if app.protection_known {
+                    toggler(app.guarded).size(20).style(theme::toggle)
+                        .on_toggle_maybe(available.then_some(|enabled| Message::LockAction(if enabled { "lock-enable" } else { "lock-disable" }))).into()
+                } else {
+                    row![button(text("Enable").size(12)).style(theme::ghost).on_press_maybe(available.then_some(Message::LockAction("lock-enable"))),
+                        button(text("Disable").size(12)).style(theme::ghost).on_press_maybe(available.then_some(Message::LockAction("lock-disable")))].spacing(4).into()
+                },
             )],
         ));
     }
@@ -1185,4 +1214,14 @@ fn settings(app: &Wave) -> Element<'_, Message> {
     .spacing(20)
     .height(Fill)
     .into()
+}
+
+fn diagnostics(app: &Wave) -> Element<'_, Message> {
+    column![
+        row![text("Support report").size(24).font(theme::SEMIBOLD), Space::new().width(Fill), link("Back", Message::DiagnosticsClose)].align_y(Alignment::Center),
+        text("Preview before sharing. Accounts, keys, addresses and raw logs are omitted. Nothing is uploaded.").size(13).style(theme::muted),
+        scrollable(container(text(app.diagnostics.as_deref().unwrap_or("")).size(12).font(theme::MONO)).padding(12)).height(Fill),
+        text_input("New report filename", &app.diagnostics_path).on_input(Message::DiagnosticsPath).size(13),
+        row![link("Copy report", Message::DiagnosticsCopy), link("Save report", Message::DiagnosticsSave)].spacing(12),
+    ].spacing(12).height(Fill).into()
 }

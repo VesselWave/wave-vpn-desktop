@@ -58,3 +58,12 @@ explicit exception; ordinary IPv4/IPv6 internet and external DNS remain blocked.
 
 See [VERIFICATION.md](VERIFICATION.md) for results and exact limits. Historical
 full-parity inventory is superseded, not a backlog to finish in this iteration.
+
+## Authorized release requirements follow-up
+
+The user authorized the must-finish items from DESKTOP-FEATURE-REVIEW.md. The
+compact settings scope above remains unchanged. Provider identity/DNS checks,
+actual firewall-state reconciliation, recovery/backoff, support report preview/
+copy/export and signed-candidate verification are implemented. Distinguish these
+changes from the environment and maintainer gates in RELEASE-GATES.md and the
+latest evidence in VERIFICATION.md; this is still a development build.

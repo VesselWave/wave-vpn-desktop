@@ -1,13 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Independently written against pinned Eddie references; see docs/PROVENANCE.md.
+pub mod checks;
 pub mod credentials;
 pub mod diagnostics;
 mod documents;
 pub mod eddie;
 mod envelope;
 pub mod firewall;
+pub mod lifecycle;
 pub mod options;
 pub mod process;
+pub mod protection;
 pub mod service;
 pub mod transport;
 
@@ -97,11 +100,26 @@ impl Client {
                     .read_to_end(&mut bytes)?;
                 anyhow::ensure!(bytes.len() <= MAX_DOCUMENT, "AirVPN response too large");
                 let plain = envelope.decode(&bytes)?;
+                // A valid encrypted refusal is an account error, not an unreachable endpoint.
+                let doc = roxmltree::Document::parse(&plain)?;
+                if doc
+                    .root_element()
+                    .attribute("error")
+                    .is_some_and(|s| !s.is_empty())
+                    || doc
+                        .root_element()
+                        .attribute("message_action")
+                        .is_some_and(|s| !s.is_empty())
+                {
+                    return Err(AccountRejected.into());
+                }
                 validate_document(&plain, action)?;
                 Ok(plain)
             })();
-            if let Ok(text) = attempt {
-                return Ok(text);
+            match attempt {
+                Ok(text) => return Ok(text),
+                Err(e) if e.is::<AccountRejected>() => return Err(e),
+                Err(_) => (),
             }
         }
         bail!("No AirVPN bootstrap server returned a valid response")
@@ -126,4 +144,30 @@ pub fn validate_document(text: &str, kind: &str) -> Result<()> {
         "AirVPN rejected this request"
     );
     Ok(())
+}
+
+#[derive(Debug)]
+pub struct AccountRejected;
+impl std::fmt::Display for AccountRejected {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(
+            "AirVPN rejected the account request. Check your credentials and account status.",
+        )
+    }
+}
+impl std::error::Error for AccountRejected {}
+#[derive(Debug)]
+pub struct AccountDevicesMissing;
+impl std::fmt::Display for AccountDevicesMissing {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Your AirVPN account has no WireGuard devices. Add a device in the AirVPN client area, then sign in again.")
+    }
+}
+impl std::error::Error for AccountDevicesMissing {}
+pub fn sign_in_error(error: &anyhow::Error) -> String {
+    if error.is::<AccountRejected>() || error.is::<AccountDevicesMissing>() {
+        error.to_string()
+    } else {
+        "Cannot reach or validate AirVPN sign-in. Use Recover in Overview, then retry; it keeps your Network Lock setting. If Eddie left DNS or firewall settings behind, recover them in Eddie.".into()
+    }
 }

@@ -104,3 +104,24 @@ through an independently verifiable channel, signs the checksums (for example,
 `gpg --armor --detach-sign <checksum-file>`) and verifies the signature from a
 fresh environment. Release signing/private reporting contacts require maintainer
 configuration; no signing identity or completed release is claimed.
+
+## Sign-in fails after a broken VPN session
+
+An account refusal and an unreachable/invalid bootstrap response have different
+messages. A network failure does not mean your password was wrong. Use Overview
+→ Recover even when signed out, then retry. An enabled Network Lock is retained;
+use the separate Network Lock control only when you intend to unlock internet.
+A new connection also repairs a leftover Wave journal after a worker crash.
+If another VPN owns the stale DNS or firewall state, resolve it in that VPN.
+Do not flush the system firewall or delete recovery records as a general remedy.
+
+The status query reads nftables through the authorized helper; missing helper,
+query errors and foreign tables produce unknown status. A missing/stale cached
+JSON file is never taken as proof that protection is on or off. Reopening Wave
+shows whether recovery is needed and whether a worker is still active.
+
+For support, use Logs → Support report, review it, then copy or save. The report
+contains no raw logs, addresses or account material. A separate export failure
+never overwrites an existing report. Include OS/version and reproduction steps;
+do not publish profiles or keyring contents. See RELEASE-GATES.md for release
+signature checking and the still-required private vulnerability contact.

@@ -93,14 +93,19 @@ def main(binary, requests):
         return proc, events
 
     def connected(proc, events):
-        deadline = time.monotonic() + 60
+        deadline = time.monotonic() + 120
+        checks = None
         while time.monotonic() < deadline:
-            event = events.get(timeout=60)
+            event = events.get(timeout=120)
+            if event.get('event') == 'checks':
+                checks = event['results']
             if event.get('event') == 'connected':
+                assert checks and checks['ipv4'] == 'verified' and checks['ipv6'] == 'verified' and checks['dns'] == 'verified', 'Provider tunnel/DNS challenges not verified'
+                print('PASS app provider challenges: IPv4/IPv6 identity and system DNS receipt verified', flush=True)
                 return
             if event.get('exited'):
                 # Do not expose raw worker diagnostics containing private addresses.
-                raise RuntimeError('Worker exited before connection; private diagnostics withheld')
+                raise RuntimeError('Worker exited before connection; safe check results: ' + json.dumps(checks))
         raise RuntimeError('Connection deadline exceeded')
 
     def protection():
@@ -135,38 +140,88 @@ def main(binary, requests):
     proc = None
     capture = None
     try:
+        run(binary, 'lock-enable')
+        protection()
+        # No real credentials: an encrypted refusal proves bootstrap is reachable
+        # with broken system DNS and an active lock, before any tunnel exists.
+        candidates = [path for path in (Path(binary).parent / 'deps').glob('protocol-*') if path.is_file() and os.access(path, os.X_OK)]
+        assert candidates, 'Build protocol integration tests before live verification'
+        test_binary = max(candidates, key=lambda path: path.stat().st_mtime)
+        Path('/etc/resolv.conf').write_text('nameserver 192.0.2.53\n')
+        bootstrap = run(str(test_binary), '--exact', 'live_bootstrap_decrypts_an_explicit_account_refusal', '--ignored', timeout=40, check=False)
+        assert bootstrap.returncode == 0, 'Bootstrap unavailable with broken DNS and Network Lock'
+        Path('/etc/resolv.conf').write_bytes(baseline_resolver)
+        print('PASS encrypted sign-in bootstrap remains reachable with broken DNS and Network Lock before connection', flush=True)
         capture = subprocess.Popen(['tcpdump', '-i', 'physical0', '-U', '-w', '/run/leaks.pcap', 'port 53 or port 853 or (tcp and host 1.1.1.1)'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         time.sleep(.5)
-        proc, events = worker(requests[0])
-        connected(proc, events)
-        tunnel(requests[0])
-        disconnect(proc, 'switch\n')
-        proc = None
-        print('PASS first server stopped; public IPv4, physical HTTP and TCP/UDP DNS stay blocked during switch', flush=True)
-        proc, events = worker(requests[1])
-        connected(proc, events)
-        tunnel(requests[1])
-        disconnect(proc)
-        proc = None
-        run(binary, 'recover')
-        protection()
-        print('PASS second server Disconnect and Recover retain Network Lock and restore resolver resources', flush=True)
-        proc, events = worker(requests[1])
-        connected(proc, events)
-        tunnel(requests[1])
-        proc.kill()
-        proc.wait(timeout=5)
-        protection()
-        run(binary, 'recover')
-        protection()
-        proc = None
-        print('PASS real-tunnel worker SIGKILL and Recover retain protection', flush=True)
+        if os.environ.get('WAVE_LIVE_NEGATIVE_ONLY') != '1':
+            proc, events = worker(requests[0])
+            connected(proc, events)
+            tunnel(requests[0])
+            disconnect(proc, 'switch\n')
+            proc = None
+            print('PASS first server stopped; public IPv4, physical HTTP and TCP/UDP DNS stay blocked during switch', flush=True)
+            proc, events = worker(requests[1])
+            connected(proc, events)
+            tunnel(requests[1])
+            disconnect(proc)
+            proc = None
+            run(binary, 'recover')
+            protection()
+            print('PASS second server Disconnect and Recover retain Network Lock and restore resolver resources', flush=True)
+            proc, events = worker(requests[1])
+            connected(proc, events)
+            tunnel(requests[1])
+            proc.kill()
+            proc.wait(timeout=5)
+            protection()
+            run(binary, 'recover')
+            protection()
+            proc = None
+            print('PASS real-tunnel worker SIGKILL and Recover retain protection', flush=True)
+        # Real negative checks: wrong system DNS and an unavailable provider endpoint.
+        for kind in ['wrong_dns', 'check_outage', 'partial_ipv6']:
+            bad = json.loads(json.dumps(requests[1]))
+            bad['options'].update({'verify_retries':'1', 'http_timeout':'2'})
+            if kind == 'wrong_dns':
+                bad['profile']['dns'] = ['192.0.2.53']
+            elif kind == 'partial_ipv6':
+                bad['checks']['exits'] = [ip for ip in bad['checks']['exits'] if ':' not in ip] + ['2001:db8::54']
+            else:
+                bad['checks']['exits'] = ['192.0.2.54', '2001:db8::54']
+            proc, events = worker(bad)
+            last = None
+            deadline = time.monotonic() + 45
+            while time.monotonic() < deadline:
+                event = events.get(timeout=45)
+                assert event.get('event') != 'connected', 'Failed provider checks accepted as connected'
+                if event.get('event') == 'checks':
+                    last = event['results']
+                if event.get('exited'):
+                    break
+            assert proc.wait(timeout=10) != 0 and last is not None
+            if kind == 'wrong_dns':
+                assert last['dns'] == 'failed', 'Wrong system DNS was not detected'
+            elif kind == 'partial_ipv6':
+                assert last['ipv4'] == 'verified' and last['ipv6'] == 'unavailable', 'Partial IP-family failure was not distinguished'
+            else:
+                assert last['ipv4'] == 'unavailable', 'Provider outage was not distinguished'
+            protection()
+            proc = None
+            print('PASS ' + kind + ': refused Connected; Network Lock and blocked physical DNS retained', flush=True)
         capture.send_signal(signal.SIGINT)
         capture.wait(timeout=5)
         capture = None
-        packets = run('tcpdump', '-n', '-r', '/run/leaks.pcap').stdout.strip()
-        assert not packets, 'Physical packet capture detected DNS/TLS bypass'
-        print('PASS physical packet capture: no plaintext DNS/DoT or direct HTTPS probe escaped across live transitions', flush=True)
+        packets = run('tcpdump', '-nn', '-r', '/run/leaks.pcap').stdout.strip()
+        # Old baseline HTTPS peers can retransmit FIN after the lock is enabled.
+        # Leakage is an outgoing physical packet, regardless of its source IP.
+        # Ethernet source matches the isolated physical NIC even for spoofed IPs.
+        local_mac = json.loads(run('ip', '-j', 'link', 'show', 'dev', 'physical0').stdout)[0]['address']
+        outgoing = run('tcpdump', '-nn', '-r', '/run/leaks.pcap', 'ether', 'src', local_mac).stdout.strip()
+        incoming_baseline = run('tcpdump', '-nn', '-r', '/run/leaks.pcap', 'ether', 'dst', local_mac, 'and', 'src', 'host', '1.1.1.1', 'and', 'src', 'port', '443').stdout.strip()
+        print('Capture counts: total=' + str(len(packets.splitlines())) + ', outgoing=' + str(len(outgoing.splitlines())) + ', incoming baseline HTTPS=' + str(len(incoming_baseline.splitlines())), flush=True)
+        assert not outgoing, 'Physical packet capture detected outgoing DNS/TLS bypass'
+        print('PASS physical packet capture: no outgoing plaintext DNS/DoT or direct HTTPS probe escaped across live transitions', flush=True)
         run(binary, 'lock-disable')
         assert underlay_http() and underlay_dns() and underlay_dns(True), 'Explicit disable did not restore physical access'
         assert public_ip() == baseline_ip, 'Explicit disable did not restore baseline internet'

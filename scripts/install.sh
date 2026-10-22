@@ -56,8 +56,15 @@ uninstall)
     if [[ -z "$stage" && ( -e /run/wave-vpn/recovery.json || -e /etc/systemd/system/wave-vpn-lock.service ) ]]; then
         echo 'Disconnect/Recover first; explicitly uninstall persistent lock with sudo wave-vpn lock-uninstall before removing binaries.' >&2; exit 1
     fi
-    if [[ -z "$stage" && -f /run/wave-vpn-protection.json ]] && grep -Eq '"enabled"[[:space:]]*:[[:space:]]*true' /run/wave-vpn-protection.json; then
-        echo 'Protection remains active. Explicitly disable Network Lock before uninstalling.' >&2; exit 1
+    if [[ -z "$stage" && -x /usr/local/bin/wave-vpn ]]; then
+        # Cached status can be missing/stale after a crash. Query nftables through
+        # the installed backend and refuse both enabled and unknown protection.
+        /usr/local/bin/wave-vpn network-status | python3 -c '
+import json, sys
+status = json.loads(sys.stdin.readline())["status"]
+if status["enabled"] is not False:
+    sys.exit("Protection is enabled or unknown. Resolve it and explicitly disable Network Lock before uninstalling.")
+'
     fi
     if [[ -z "$stage" && -f /etc/systemd/system/wave-vpn-service.socket ]]; then
         /usr/local/bin/wave-vpn service-uninstall
