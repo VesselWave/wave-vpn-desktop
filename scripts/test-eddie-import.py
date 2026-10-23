@@ -46,7 +46,9 @@ for variant in ['n','p','s']:
             subprocess.run(['secret-tool','store','--label=Wave synthetic Eddie interoperability',*attrs], input=b'profile-test-password\n', check=True, timeout=60)
         try:
             with (Path(directory) / 'eddie.log').open('wb') as log:
-                child = subprocess.Popen([str(cli),'--path.resources=/usr/share/eddie-ui','--profile=' + str(base),'--remember=true','--connect=false','--netlock=false','--dns.mode=none'], stdin=subprocess.PIPE, stdout=log, stderr=log)
+                # Background lab launchers can inherit SIGINT=SIG_IGN. Reset it
+                # for Eddie so the clean-save request is actually delivered.
+                child = subprocess.Popen(['/usr/bin/env','--default-signal=INT',str(cli),'--path.resources=/usr/share/eddie-ui','--profile=' + str(base),'--remember=true','--connect=false','--netlock=false','--dns.mode=none'], stdin=subprocess.PIPE, stdout=log, stderr=log)
                 try:
                     if variant == 'p':
                         child.stdin.write(b'profile-test-password\n')

@@ -7,7 +7,9 @@ from pathlib import Path
 import subprocess
 import tempfile
 repo = Path(__file__).resolve().parents[1]
-with tempfile.TemporaryDirectory(prefix='wave-release-verification-') as directory:
+# macOS TMPDIR can exceed the Unix-domain socket limit once GnuPG appends
+# its agent socket name. mkdtemp still creates this short directory privately.
+with tempfile.TemporaryDirectory(prefix='wave-release-', dir='/tmp') as directory:
     root = Path(directory)
     keyhome = root / 'keyring'
     keyhome.mkdir(mode=0o700)

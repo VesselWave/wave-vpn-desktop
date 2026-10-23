@@ -1,11 +1,12 @@
 # Desktop release gates
 
 The initial target is Ubuntu 24.04 with systemd, kernel WireGuard, nftables,
-Secret Service and GNOME. ARM64 GNOME X11 has local VM evidence. x86_64 and
-Wayland are release targets, not supported configurations until verified.
-Other distributions/init systems/platforms remain outside the initial promise.
-The VM currently uses a local boot recovery workaround; normal EFI boot/reboot
-remains unverified even though helper availability after cold startup passes.
+Secret Service and GNOME. x86_64 GNOME Wayland, ARM64 GNOME X11, and the
+additional KDE/Xfce lab guests now have verified candidate command evidence
+recorded in VERIFICATION.md. Other distributions/init systems/platforms remain
+outside the initial promise. Normal EFI guest boot and boot-persistent lock
+ordering have been confirmed on the release candidate. Safe physical suspend/resume
+requires dedicated bare-metal Linux hardware and safe recovery, and remains open.
 
 A candidate must identify the exact source tag/revision and tested binaries.
 Before publishing, record results in VERIFICATION.md for:

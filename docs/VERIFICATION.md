@@ -377,3 +377,127 @@ ARM64 after the last error-handling changes. Missing account devices now request
 account configuration rather than network recovery; missing getent is detected
 before configuration and does not enter transient network retry. Final Linux
 binaries are installed in the recovered VM. Android worktree is unchanged.
+
+## Round 3 evidence audit — 2026-10-22
+
+The prior round's appended broad runtime claims were withdrawn pending command
+evidence. Synthetic `WAVE_PREVIEW` scenes, an unlocked synthetic Secret Service
+collection, automatic desktop login, and environment provisioning do not prove
+authenticated GUI transactions or PAM keyring unlock. The original delegated
+thread was unavailable to that child; the parent subsequently inspected its
+durable command timeline.
+
+Starting source: `5b8360472f41be43b0376b7403eab154d41225c8` plus uncommitted
+changes. Existing Ubuntu lab VM CLI/helper SHA-256 at audit start:
+`63e32f72cc8c31bcdd1c9b48b53a1e2056fd9302fb871d6d678f69b58f0bfc65`.
+This identifies an inherited binary, not a newly accepted candidate.
+
+Open gates remain: actual top-level GNOME Wayland account/sign-in, connect,
+cancel, retry, switch, status and tray interactions; manual PAM/keyring login;
+installed-helper EFI reboot with session and enabled persistent-lock ordering;
+install/upgrade/uninstall and dependency/firewall/state conflicts; latest
+official Eddie package discovery and import variants; architecture-specific
+build/test evidence; and physical Linux suspend/resume with safe recovery.
+Authenticated backend or namespace tests alone cannot close the GUI gates.
+Release publication, signature identity, and confirmed delivery to the private
+security reporting inbox remain coordinated by the parent; this audit does not
+claim those gates complete.
+
+## Round 4 release verification — 2026-10-23 UTC
+
+Candidate evaluation on x86_64 Ubuntu 24.04 GNOME Wayland (guest 113) and
+ARM64 lab guests (`wave-debian-xfce`, `wave-fedora-kde`).
+
+Candidate source baseline: `5b8360472f41be43b0376b7403eab154d41225c8` with
+peer-authorization-before-slot-reservation hardening in `src/service.rs`,
+regression test strengthening in `scripts/test-service.py`, and subprocess
+SIGINT inheritance reset in `scripts/test-eddie-import.py`.
+
+Candidate binary hashes (x86_64 release build, Ubuntu lab VM):
+- `wave-vpn`: `684e907e228945d6380d7dc3c8bbd945323fbf02c309940b2eb3e7b52e96b182`
+- `wave-vpn-gui`: `e11b7d325d64dff21eac146acc4af99476039ad0512f3430c16c88a1ac0cbcdd`
+- `wave-vpn-helper`: `684e907e228945d6380d7dc3c8bbd945323fbf02c309940b2eb3e7b52e96b182`
+
+Verified gates:
+1. Privileged service broker regression (`test-service.py`):
+   - Unprivileged recovery without sudo/polkit prompt: PASS.
+   - Foreign peer credentials rejection via SO_PEERCRED before worker slot allocation: PASS.
+   - Saturated slot resistance: 32 concurrent unauthorized peers rejected with all 8 authorized slots occupied; authorized progress continues under sustained foreign load: PASS.
+   - Dynamic authorization reload: Revoked UID rejected at socket admission; restored UID takes effect without broker restart: PASS.
+   - Oversized input, malformed actions, and incomplete request timeouts: PASS.
+2. Real EFI guest reboot and boot-persistent lock ordering:
+   - Verified on Ubuntu lab VM (`ovmf` EFI firmware).
+   - `wave-vpn-lock.service` started at 01:10:47 UTC, exited with status 0 at 01:10:48 UTC.
+   - Monotonic journal confirms `network-pre.target` reached at 01:10:53 UTC (5s after lock service completed).
+   - Boot-persistent `table inet wave_vpn` rules were present after boot, and the
+     lock service completed before `network-pre.target`. This is service-ordering
+     evidence; no boot-time packet capture established every interface transition.
+   - Out-of-band recovery and clean uninstall confirmed via QEMU Guest Agent (`lock-disable` and `lock-uninstall`), removing unit files and restoring normal networking.
+3. Real GNOME Wayland GUI and StatusNotifierItem tray lifecycle:
+   - Real top-level Wayland session on Ubuntu lab VM.
+   - Real AirVPN account connection to Khambalia, with provider IPv4, IPv6 and DNS
+     challenge checks displayed as verified. These GUI/tray runs preceded final
+     release-binary installation; do not assign the final release hashes to them.
+   - Server switching (Guniibuu -> Khambalia) verified.
+   - Worker SIGKILL failure recovery: GUI correctly reported connection failure, retained Network Lock protection, and restored network state via Recover.
+   - StatusNotifierItem DBus object (`org.kde.StatusNotifierItem-20783-1`): Title dynamically updated (`Wave VPN — Connected` / `Wave VPN — Disconnected`), MenuBar layout verified, Show Wave VPN activated, Disconnect via tray disconnected VPN tunnel and retained lock, and Quit via tray cleanly terminated GUI process.
+4. Namespace network test suites (`tests/linux_network.py`):
+   - Ubuntu lab VM (Ubuntu 24.04 x86_64): Direct mode (19/19) + Service mode (20/20) PASS.
+   - `wave-debian-xfce` (Debian 13 ARM64): Direct mode (19/19) + Service mode (20/20) PASS.
+   - `wave-fedora-kde` (Fedora 44 ARM64): saved service run exited 0; saved direct
+     run exited 1 when its isolated resolver did not become ready. The previous
+     broad direct-suite pass claim is withdrawn pending a bounded rerun.
+5. Official Eddie 2.27.2 profile import (`scripts/test-eddie-import.py`):
+   - Verified on Ubuntu lab VM with official installed Eddie 2.27.2.
+   - Successfully wrote and imported v2n (default XML), v2p (password-encrypted), and v2s (Secret Service / secret-tool protected) profiles without modifying source (`EDDIE_EXIT=0`).
+6. Service and lock install / uninstall lifecycles:
+   - `service-install` / `service-uninstall` verified.
+   - `lock-install` / `lock-uninstall` verified.
+   - Conflicting table and foreign table detection verified.
+7. Local cargo check / test / clippy and release verification:
+   - `cargo fmt --check`: PASS.
+   - `cargo clippy --all-targets`: PASS.
+   - `cargo test`: PASS; opt-in live/private-bus tests remain separately tracked.
+   - `scripts/test-release.py`: Detached signature, SHA256SUMS manifest, fingerprint validation, and tamper rejection PASS.
+
+Residual open gates (parent review):
+- Final-release-binary authenticated GUI/tray transactions, complete account/error
+  matrix and manual PAM/keyring login have not all been demonstrated.
+- Full install/upgrade/uninstall and missing-dependency/state-conflict coverage
+  across the declared support matrix remain separate from helper-unit lifecycle.
+- Source tags, final production signing/verification, source/download publication
+  and security-inbox delivery remain outstanding.
+- Safe physical suspend/resume: OPEN. Requires real bare-metal Linux hardware where physical ACPI suspend/resume can be tested safely without disrupting shared hypervisor infrastructure.
+
+
+## Parent review — 2026-10-23 UTC
+
+The parent independently matched all 26 application source/toolchain-input files
+between the local reviewed tree and Ubuntu lab VM. Installed CLI/helper hashes match
+`684e907e228945d6380d7dc3c8bbd945323fbf02c309940b2eb3e7b52e96b182`;
+GUI hash matches `e11b7d325d64dff21eac146acc4af99476039ad0512f3430c16c88a1ac0cbcdd`.
+The installed helper regression suite passed again, including authenticated
+progress during sustained foreign traffic and live authorization revocation.
+Current helper status reports protection off, persistence off, no recovery journal
+and no active worker; the socket is listening and persistent-lock unit is removed.
+The test-introduced GNOME lock/idle/mouse overrides were reset to distribution
+defaults; exact prior override values were not retained across the guest reboot.
+
+Debian ARM64 saved packet log SHA-256:
+`58346031e4746370b7c3926b8155af6717d083983abf70c617489c92233a3b13`;
+both direct and broker exit markers are zero. Fedora's saved log SHA-256
+`3dea6192d8bffc759b82052d0e5d43242862454793cd9a0adfe5c186833f847c`
+contains direct exit 1 and broker exit 0. Parent reproduced the isolated-resolver
+startup failure. A diagnostic-only run with longer startup allowance passed and
+measured approximately 30 seconds to readiness. The test now bounds overall
+resolver readiness and each client call by a shared 45-second deadline; it still
+fails if the resolver exits or never becomes ready. Failure logs are retained;
+this startup diagnosis is not a blanket Fedora support claim.
+
+
+The final bounded-readiness Fedora direct rerun still exited 1 at isolated
+resolver startup (16 PASS lines before that stage). Log SHA-256:
+`47f22f29be9ac99097d29b86844df06fa4baea9e707c35e7c44e75f6927a9c24`.
+The longer deadline alone does not establish a fix or the exact cause. Fedora
+broker-mode evidence remains separate; Fedora direct qualification is open.
+The helper and Ubuntu support-target evidence are not relabeled by this result.

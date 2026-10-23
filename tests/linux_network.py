@@ -445,9 +445,21 @@ while True: time.sleep(60)
     run("dbus-daemon", "--system", "--fork", "--nopidfile")
     dns_log = open("/run/resolved-test.log", "w")
     dns_service = subprocess.Popen(["/usr/lib/systemd/systemd-resolved"], stdout=dns_log, stderr=dns_log)
-    for _ in range(30):
-        if subprocess.run(["resolvectl", "status"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
+    # Fedora's isolated resolver can need about 30 seconds for startup. Bound
+    # both the overall wait and each D-Bus client call; retain a real failure
+    # if the daemon exits or never becomes ready.
+    resolver_deadline = time.monotonic() + 45
+    while time.monotonic() < resolver_deadline:
+        try:
+            ready = subprocess.run(["resolvectl", "status"], stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL,
+                                   timeout=max(.1, resolver_deadline - time.monotonic())).returncode == 0
+        except subprocess.TimeoutExpired:
+            ready = False
+        if ready:
             break
+        if dns_service.poll() is not None:
+            raise AssertionError("isolated resolved exited: " + Path("/run/resolved-test.log").read_text())
         time.sleep(.1)
     else:
         raise AssertionError("isolated resolved service failed: " + Path("/run/resolved-test.log").read_text())
