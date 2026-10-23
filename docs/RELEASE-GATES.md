@@ -14,6 +14,12 @@ disabling `resolvectl` paging; same-daemon comparisons identified a client
 SIGPIPE failure. See the dated verification record for exact debug-binary scope.
 This does not qualify a final release GUI or broaden the supported platforms.
 
+The final bounded installed-release GUI check passed account/error distinction,
+Recover before sign-in and isolated-keyring save/restart restore. Completed
+connect/cancel/switch/retry/stop, tray, sign-out and PAM login remain unqualified;
+the attempted connection did not establish a final Connected result. See the
+dated verification record. No production source correction followed this check.
+
 Before publishing, record results in VERIFICATION.md for:
 
 - Actual GUI sign-in/restore/sign-out, wrong account vs unreachable bootstrap,

@@ -535,3 +535,35 @@ namespaces or processes remained after cleanup. Parent reviewed the patch,
 comparison logs and evidence hashes. Local locked Rust tests and strict clippy
 passed. This closes the reproduced harness failure, not final-release GUI,
 installed-service/PAM-keyring, physical suspend or general Fedora qualification.
+
+
+### Bounded final-release GUI account/error check — 2026-10-23 UTC
+
+The installed VM113 GUI was checked through `/proc/<pid>/exe`: normal Wayland
+PID 7319, isolated authenticated PID 11460, restart-restored PID 12457; all matched
+release GUI SHA-256 `e11b7d325d64dff21eac146acc4af99476039ad0512f3430c16c88a1ac0cbcdd`.
+Installed CLI/helper were rechecked against the previously recorded release hash.
+
+Passed: actual final GUI synthetic rejected-account message; distinct unreachable
+bootstrap/recovery message under a temporary outbound rejection rule; GUI Recover
+before authenticated sign-in retained protection (guest-agent status confirmed
+no worker or recovery journal); actual authorized sign-in/save and automatic
+restart restore in an isolated encrypted Secret Service/D-Bus session displayed
+on the real GNOME Wayland desktop. This isolated keyring was explicitly unlocked
+for testing; it is not PAM/login-keyring evidence. No credentials were printed or
+supplied in process arguments.
+
+GUI Connect started a real worker, but a final Connected/provider-check display
+was not captured. Final-release connect/cancel/switch/retry/stop, tray lifecycle,
+GUI sign-out, and manual PAM/keyring login remain unqualified. Automatic GDM login
+left the normal login collection locked; session unlock via loginctl does not
+close that gate. Work stopped at the parent's bounded wrap-up instruction.
+
+Cleanup confirmed protection/persistence off, no worker/recovery state/tunnel,
+active service socket, persistent-lock unit absent, temporary firewall table and
+private guest collection/config/logs removed. No GNOME settings were written;
+before/after desktop dconf snapshots matched. Normal app netlock preference was
+explicitly left false; its original serialized value was not captured, so exact
+app-preference byte restoration is not claimed. No app source changes or new
+source-failure conclusions. Private filtered report and capture hashes:
+`/tmp/wave-linux-final-gui/report.md` and `evidence-sha256.txt`.
