@@ -9,6 +9,11 @@ ordering have been confirmed on the release candidate. Safe physical suspend/res
 requires dedicated bare-metal Linux hardware and safe recovery, and remains open.
 
 A candidate must identify the exact source tag/revision and tested binaries.
+The Fedora isolated packet harness now passes direct and broker modes after
+disabling `resolvectl` paging; same-daemon comparisons identified a client
+SIGPIPE failure. See the dated verification record for exact debug-binary scope.
+This does not qualify a final release GUI or broaden the supported platforms.
+
 Before publishing, record results in VERIFICATION.md for:
 
 - Actual GUI sign-in/restore/sign-out, wrong account vs unreachable bootstrap,

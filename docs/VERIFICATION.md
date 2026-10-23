@@ -501,3 +501,37 @@ resolver startup (16 PASS lines before that stage). Log SHA-256:
 The longer deadline alone does not establish a fix or the exact cause. Fedora
 broker-mode evidence remains separate; Fedora direct qualification is open.
 The helper and Ubuntu support-target evidence are not relabeled by this result.
+
+### Fedora resolver client correction — 2026-10-23 UTC
+
+Further isolated diagnosis reproduced a client failure while systemd-resolved
+remained alive and answered D-Bus requests. Against the same running daemon,
+three comparisons returned SIGPIPE (`-13`) for `resolvectl status` with both
+streams redirected to `/dev/null`; explicit `--no-pager` returned zero in every
+comparison. Defunct `less` children were observed. This identifies a pager-related
+client failure in the reproduced harness. The historical failures discarded
+client status/stderr, so their individual causes cannot be proved retrospectively.
+The earlier 30-second retry timing did not establish daemon startup duration.
+
+The test now disables paging for resolver queries, retains client error details,
+bounds each probe to two seconds within the existing 45-second overall deadline,
+and terminates/reaps its private resolver in `finally`. Packet and DNS assertions
+are unchanged. Corrected full direct and broker suites exited zero, with 19 and
+21 literal PASS lines respectively. Environment: Fedora 44 ARM64 KDE Lima guest,
+kernel `6.19.10-300.fc44.aarch64`, systemd `259.5-1.fc44.aarch64`.
+
+Reviewed evidence SHA-256:
+
+- Direct log: `14d8ddc5b78f731a750f672eb73889682baf7276ccea04aa6211cb9c6a02bdf9`.
+- Broker log: `b5173fe11573891d0965d3e315e088160fb7bacd81150c87c7c15bcef9b3eb23`.
+- Same-daemon comparison: `a49a6317e6c7b6ed18d3bf6dbba34c65deb9c2aa4d1915bccb0ed126e8bb33aa`.
+- Corrected test source: `328bf7efb4b02775c1d2a5fb36673bd2e8f251227d62772be663fd9749137f11`.
+- Tested debug CLI: `1bcfc814f13965da57bfb6f5f569b0baa4e4e8ba1265f4146737f82b85a83ee8`.
+
+Private review evidence is `/tmp/wave-fedora-review`; guest commands run
+`sudo env TERM=xterm-256color python3 tests/linux_network.py target/debug/wave-vpn`
+from its source checkout, adding `WAVE_TEST_SERVICE=1` for broker mode. No test
+namespaces or processes remained after cleanup. Parent reviewed the patch,
+comparison logs and evidence hashes. Local locked Rust tests and strict clippy
+passed. This closes the reproduced harness failure, not final-release GUI,
+installed-service/PAM-keyring, physical suspend or general Fedora qualification.
