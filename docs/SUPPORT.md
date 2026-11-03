@@ -6,10 +6,33 @@ EFI persistent-lock boot checks. Debian ARM64 Xfce and Fedora ARM64 KDE have
 separate namespace-test evidence; this does not establish complete GUI support.
 See VERIFICATION.md for exact binary hashes, failures and remaining gates.
 This is a development test matrix, not a supported production release promise.
-The CI workflow must actually run before claiming hosted CI results. Other
+Hosted CI and the tagged v0.1.0 packaging workflow passed; these checks do not
+qualify the complete GUI or physical lifecycle. Other
 distributions, independent resolvconf implementations and other architectures
 remain unverified. macOS builds the UI only.
 Windows, OpenVPN and AirVPN account-side port/DDNS management are unsupported.
+
+## Install the v0.1.0 prebuilt candidate
+
+Read [the known limits](RELEASE-v0.1.0.md) first. Download both source and binary
+archives plus the signed manifest and key from the same release. Verify them
+using the independently trusted fingerprint and `scripts/verify-release.sh`
+from a trusted source checkout before extracting or executing anything.
+The published binary is x86_64 Linux; it does not run on ARM64 or macOS.
+
+After installing the runtime dependencies described below, extract in a new
+empty directory and install using the source archive's installer:
+
+```sh
+tar -xzf wave-vpn-0.1.0-source.tar.gz
+tar -xzf wave-vpn-0.1.0-x86_64-unknown-linux-gnu.tar.gz
+sudo bash wave-vpn-0.1.0/scripts/install.sh install \
+  "$PWD/wave-vpn-0.1.0-x86_64-unknown-linux-gnu/usr/local/bin"
+wave-vpn-gui
+```
+
+Rust is not required for this prebuilt installation. Disconnect and quit Wave
+before upgrading. Retain the source directory for the documented uninstaller.
 
 ## Build and install
 
@@ -109,8 +132,9 @@ gates pass. The maintainer signing identity and private reporting contact are
 recorded in SECURITY.md. Publish the fingerprint through a separately trusted
 channel and confirm inbox delivery and signing-key backup before distribution.
 Use `bash scripts/release.sh --sign-key FULL_FINGERPRINT` for a signed candidate,
-then independently verify it with `scripts/verify-release.sh`. No completed
-public release or inbox-delivery test is claimed.
+then independently verify it with `scripts/verify-release.sh`. The [v0.1.0 experimental prerelease](https://github.com/VesselWave/wave-vpn-desktop/releases/tag/v0.1.0)
+is published in the currently access-restricted repository. Public accessibility
+and inbox delivery remain separate unconfirmed gates.
 
 ## Sign-in fails after a broken VPN session
 

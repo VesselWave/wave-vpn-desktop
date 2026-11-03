@@ -6,6 +6,13 @@ not affiliated with AirVPN.
 This repository builds independently. See [provenance](docs/PROVENANCE.md) for
 pinned Eddie references and authored presentation assets.
 
+## Experimental release
+
+[v0.1.0 release notes](docs/RELEASE-v0.1.0.md) describe the known privacy and
+qualification limits. See [installation and support](docs/SUPPORT.md) and the
+[public-release checklist](docs/PUBLIC-RELEASE-CHECKLIST.md) before testing or
+sharing a build. This is not production-qualified VPN protection.
+
 ## Build and install
 
 Requires Rust. Linux connections require kernel WireGuard, `wireguard-tools`,
