@@ -7,10 +7,10 @@ known failures were retained. Old commit identities were normalized to the publi
 project identity in the rewritten history. No credential or private-key exposure
 was confirmed.
 
-The v0.1.0 executable bytes are unchanged. Old source/documentation packages and
-checksum files were withdrawn. Sanitized replacement packages are prepared and
-await a newly signed checksum manifest before they can be restored. Do not mix
-an old manifest with a new archive. Package provenance retains the
+The v0.1.0 executable bytes are unchanged. Source/documentation packages were
+sanitized and restored with a fresh signed checksum manifest. Download the current
+archives, checksums and signatures together; do not mix an old manifest with a new
+archive. Package provenance retains the
 original binary build revision and identifies the cleaned source revision
 separately. This cleanup is not a new build or qualification result.
 
