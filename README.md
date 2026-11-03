@@ -99,5 +99,6 @@ The repository history and release packages were sanitized on 2026-11-03.
 Lab records use example identities and addresses; private management details
 are omitted. Sanitized release archives and fresh signed checksum manifests are
 available. The APK and executable bytes are unchanged. Download the current
-archives, checksums and signatures together. Existing clones and GitHub PR
-references may retain old history.
+archives, checksums and signatures together. The GitHub repositories were
+subsequently recreated under the same names without the old PR threads. Existing
+clones may retain old history.
