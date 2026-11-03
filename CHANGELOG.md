@@ -1,19 +1,19 @@
 # Changelog
 
-## 0.1.0 — 2026-11-02 (experimental prerelease)
+## 0.1.0 · 2026-11-02 · experimental prerelease
 
-- Independent GPL-3.0-or-later Rust/Iced WireGuard client for AirVPN with compact
-  account, server selection, Network Lock, status/logs and tray workflows.
-- Secret Service account storage and read-only Eddie profile import.
-- Root-owned socket helper, firewall-state reconciliation, crash recovery,
-  cancellable setup and retry backoff.
-- Provider IPv4/IPv6 identity and DNS checks, redacted diagnostic preview/export,
-  and source/binary release packaging with signature/checksum verification.
+First public build. [Release notes](docs/RELEASE-v0.1.0.md).
 
-Authenticated backend and local-peer tests pass in the environments documented
-in [VERIFICATION.md](docs/VERIFICATION.md). Remaining GUI/platform/lifecycle gates
-are tracked in [RELEASE-GATES.md](docs/RELEASE-GATES.md).
+**Added**
 
-This is an experimental prerelease, with unresolved qualification gates. See
-[v0.1.0 release notes](docs/RELEASE-v0.1.0.md). Boot autoconnect, advanced
-networking UI, additional protocols and other desktop VPN backends are deferred.
+- WireGuard client for AirVPN, written in Rust with Iced: sign-in, servers, Network Lock, status, logs and tray
+- Secret Service account storage and read-only Eddie profile import
+- Root-owned socket helper, firewall-state reconciliation, crash recovery, cancellable setup and retry backoff
+- AirVPN IPv4, IPv6 and DNS checks; reviewed support report you can preview and export
+- Source and binary release packaging with checksum and signature verification
+
+**Status**
+
+Authenticated and isolated network tests pass in the environments in [verification](docs/VERIFICATION.md). Remaining GUI, platform and lifecycle checks are in [release gates](docs/RELEASE-GATES.md).
+
+**Not planned for now:** boot autoconnect, an advanced networking UI, other protocols and other desktop VPN backends.

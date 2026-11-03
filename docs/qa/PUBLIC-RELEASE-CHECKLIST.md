@@ -1,5 +1,7 @@
 # Public release and forum checklist
 
+> **In short:** The maintainer checklist for announcing an experimental build on the AirVPN forum. Not AirVPN admission criteria; no AirVPN approval is claimed.
+
 Current assessment: 2026-11-02 (Chicago). v0.1.0 is an experimental prerelease.
 This is a maintainer checklist, not AirVPN admission criteria. The forum describes
 [third-party software](https://airvpn.org/forums/forum/49-third-party-software/)

@@ -1,5 +1,7 @@
 # Desktop feature review — 2026-10-21
 
+> **In short:** Compared Wave with the archived desktop app and Eddie 2.27.2, and recommended finishing a small, dependable client first. Its five must-finish items were then implemented.
+
 Recommendation: finish a dependable, small Linux WireGuard client before adding
 advanced settings. The user authorized implementation of all five must-finish items after this
 review. Advanced features below remain outside the implementation scope. The accepted surface in [PARITY.md](../PARITY.md) remains in force.

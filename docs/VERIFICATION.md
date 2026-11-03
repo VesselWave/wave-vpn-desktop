@@ -1,4 +1,42 @@
-# Verification record
+# Verification
+
+What has been tested on Wave VPN for Linux, what failed, and what's still open. The dated log below is the evidence; newer reports are in [qa/](README.md#how-it-was-tested), and what remains before a stable release is in [release gates](RELEASE-GATES.md).
+
+## Summary
+
+**Passes**
+
+- Rust tests on all targets and strict Clippy, on Linux and macOS CI
+- Isolated network suite (19 scenarios) with the shipped v0.1.0 binary on a physical CachyOS laptop, plus Ubuntu, Debian and Fedora lab guests ([report](qa/RELEASE-PHYSICAL-LAPTOP.md))
+- Authenticated live suite from the v0.1.0 source on ARM64: two AirVPN servers, IPv4, IPv6 and DNS checks, switching, crash recovery, and no escaped packets in capture ([report](qa/RELEASE-PUBLIC-PREFLIGHT.md))
+- Earlier real-backend runs on two servers: dual-stack traffic, AirVPN DNS, protected disconnect, crash and Recover
+- EFI boot with the optional boot lock; keyring save and restore; Eddie 2.26.2 and 2.27.2 profile import
+- Installed-release GUI: wrong-account vs unreachable sign-in, Recover before sign-in
+
+**Seen once, not reproduced**
+
+- A direct DNS query failed after switching to the second server in one ARM64 live run. The rerun passed in full; it's tracked in the release gates.
+
+**Not yet covered**
+
+- GUI connect, cancel, switch, retry and stop with the release binary; tray; sign-out; desktop login (PAM)
+- Physical suspend and resume; the full install, upgrade and conflict matrix
+
+## Log, newest first
+
+- [Parent review — 2026-10-23 UTC](#parent-review--2026-10-23-utc)
+- [Round 4 release verification — 2026-10-23 UTC](#round-4-release-verification--2026-10-23-utc)
+- [Round 3 evidence audit — 2026-10-22](#round-3-evidence-audit--2026-10-22)
+- [Desktop release requirements implementation — 2026-10-21](#desktop-release-requirements-implementation--2026-10-21)
+- [Desktop presentation follow-up — 2026-10-21](#desktop-presentation-follow-up--2026-10-21)
+- [Tray and one-time networking authorization — 2026-10-21](#tray-and-one-time-networking-authorization--2026-10-21)
+- [Account flow and live Network Lock toggle — 2026-10-21](#account-flow-and-live-network-lock-toggle--2026-10-21)
+- [Authenticated backend verification — 2026-10-21](#authenticated-backend-verification--2026-10-21)
+- [Focused desktop verification — 2026-10-21](#focused-desktop-verification--2026-10-21)
+- [Desktop parity update — 2026-10-21](#desktop-parity-update--2026-10-21)
+- [Initial verification](#initial-verification)
+
+## Initial verification
 
 The latest focused and authenticated sections below supersede historical gaps.
 

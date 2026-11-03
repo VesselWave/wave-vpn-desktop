@@ -34,6 +34,19 @@ python3 scripts/verify-airvpn.py --vm VM_NAME --guest-binary /absolute/path/to/w
 
 It reads `KEY=<JSON string>` credentials from a private `.env` (mode 0600). Lab VM setup is in [lab/](lab/README.md).
 
+### Helper, keyring and Eddie checks
+
+In a disposable VM, after installing:
+
+```sh
+bash scripts/verify-linux.sh
+WAVE_SERVICE_TEST_VM=1 python3 scripts/test-service.py      # as the authorized desktop user
+bash scripts/test-keyring.sh                                # needs an unlocked GNOME keyring
+WAVE_EDDIE_DESKTOP_TEST=1 python3 scripts/test-eddie-import.py
+```
+
+The keyring and Eddie tests use synthetic credentials and touch only their own profile and keyring item. The Eddie test needs the official `eddie-ui` package at `/usr/lib/eddie-ui`; it has been verified against Eddie 2.26.2 and 2.27.2 CLI profiles. (On the ARM64 test VM, Eddie's bundled GUI couldn't start because it needs `libtiff.so.5`, so its CLI saves the test profile.)
+
 ## How it fits together
 
 - `wave-vpn-gui` (Iced) runs as your user and owns the UI, account and keyring.

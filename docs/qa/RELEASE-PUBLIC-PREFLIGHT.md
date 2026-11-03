@@ -1,5 +1,7 @@
 # Public prerelease preflight — 2026-11-02
 
+> **In short:** The authenticated live suite, built from the v0.1.0 source on ARM64. The first run failed one DNS query after switching servers; the rerun passed in full. The failure is unexplained and stays tracked.
+
 ## Source-release ARM64 authenticated run: INCOMPLETE / FAILED
 
 Built the CLI from the published v0.1.0 source archive with locked dependencies

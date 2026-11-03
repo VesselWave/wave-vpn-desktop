@@ -1,5 +1,7 @@
 # physical test laptop physical baseline — 2026-11-02
 
+> **In short:** The published x86_64 binary on a physical CachyOS laptop: GUI rendering and staged install and uninstall pass, and after a test-harness fix all 19 isolated network scenarios pass. The host was left unchanged.
+
 physical test laptop (not lab host) is a physical x86_64 CachyOS/Arch laptop with an active
 Wayland session, AC power and `/sys/power/mem_sleep` reporting `s2idle [deep]`.
 The user provided temporary SSH access and confirmed availability to wake it.
