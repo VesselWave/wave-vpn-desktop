@@ -1,73 +1,47 @@
-# Desktop release gates
+# Release gates
 
-The initial target is Ubuntu 24.04 with systemd, kernel WireGuard, nftables,
-Secret Service and GNOME. x86_64 GNOME Wayland, ARM64 GNOME X11, and the
-additional KDE/Xfce lab guests now have verified candidate command evidence
-recorded in VERIFICATION.md. Other distributions/init systems/platforms remain
-outside the initial promise. Normal EFI guest boot and boot-persistent lock
-ordering have been confirmed on the release candidate. Safe physical suspend/resume
-requires dedicated bare-metal Linux hardware and safe recovery, and remains open.
+What has to pass before Wave VPN for Linux can be called production-qualified. v0.1.0 ships as an experimental prerelease with the open items below. Results and exact binaries go in [verification](VERIFICATION.md); every candidate must name its exact source tag and tested binaries.
 
-A candidate must identify the exact source tag/revision and tested binaries.
-The Fedora isolated packet harness now passes direct and broker modes after
-disabling `resolvectl` paging; same-daemon comparisons identified a client
-SIGPIPE failure. See the dated verification record for exact debug-binary scope.
-This does not qualify a final release GUI or broaden the supported platforms.
+**Target platform:** Ubuntu 24.04 with systemd, kernel WireGuard, nftables, Secret Service and GNOME. Other distributions, init systems and platforms are outside the initial promise.
 
-The final bounded installed-release GUI check passed account/error distinction,
-Recover before sign-in and isolated-keyring save/restart restore. Completed
-connect/cancel/switch/retry/stop, tray, sign-out and PAM login remain unqualified;
-the attempted connection did not establish a final Connected result. See the
-dated verification record. No production source correction followed this check.
+## Passed
 
-The v0.1.0 experimental prerelease explicitly retains the gaps below. Before a
-production-qualified release, record results in VERIFICATION.md for:
+- [x] Command-level evidence on x86_64 GNOME Wayland, ARM64 GNOME X11, and KDE and Xfce lab guests
+- [x] Normal EFI boot, and boot-persistent lock ordering on the release candidate
+- [x] Isolated packet suite in direct and helper modes, including Fedora and physical CachyOS (the shipped binary passes all 19 scenarios)
+- [x] Authenticated live suite from the published source: two servers, switching, crash recovery, no escaped packets in capture
+- [x] Installed-release GUI: wrong-account vs unreachable sign-in, Recover before sign-in, keyring save and restore across restart
+- [x] Security inbox confirmed; signing fingerprint published on keys.openpgp.org and vpn.vwave.me
 
-- Actual GUI sign-in/restore/sign-out, wrong account vs unreachable bootstrap,
-  recovery before sign-in, device selection, connect/cancel/switch, retry and stop.
-- DNS and IPv4/IPv6 provider checks including wrong DNS/identity, unavailable check
-  service, and partial connectivity. Network Lock must survive failed checks.
-- Worker/helper crash, uplink loss/return, suspend/resume, and real reboot with
-  session lock vs optional persistent lock. Verify actual firewall state and DNS
-  restoration, not only cached status files.
-- Install/upgrade/uninstall, conflicting firewall ownership, missing dependencies
-  and state loss; both supported CPU architectures and GNOME X11/Wayland.
-- Latest available official Eddie profile import with default/password/keyring
-  protection. Record both the source version and available platform package;
-  do not relabel an older official package as a newer tested release.
-- Confirm delivery to the maintainer-designated private reporting contact,
-  `vesselwave@protonmail.com`. The contact and public signing identity are now
-  recorded in SECURITY.md; no production release or inbox-delivery test is claimed.
+## Still open
+
+- [ ] **GUI flows with the release binary:** sign-in, restore and sign-out; device selection; connect, cancel, switch, retry and stop; tray; desktop login (PAM). The last attempt didn't reach a final Connected state.
+- [ ] **Connection checks in the GUI:** wrong DNS or identity, unavailable check service, partial connectivity, with Network Lock surviving every failure.
+- [ ] **Lifecycle:** physical suspend and resume (needs dedicated bare-metal hardware with safe recovery), real reboot with session lock vs boot lock, checking actual firewall and DNS state rather than cached status.
+- [ ] **Install matrix:** install, upgrade and uninstall; conflicting firewall ownership; missing dependencies; lost state; both CPU architectures; GNOME on X11 and Wayland.
+- [ ] **Eddie import** from the latest official Eddie with default, password and keyring protection. Record both the source version and the platform package actually tested; never relabel an older package as newer.
+- [ ] The second-server DNS failure seen once in the ARM64 live suite: reproduce or explain.
 
 ## Release identity
 
-The OpenPGP release-signing fingerprint is:
+Releases are signed with **Wave VPN Releases &lt;vesselwave@protonmail.com&gt;**, fingerprint `4140 18C0 BBB8 C0A7 0A80 BF57 0AA3 2CCB 2C0B 3951` ([public key](keys/wave-release-signing.asc), expires 2028-10-21). A good signature identifies who signed; it doesn't mean the gates above are complete.
 
-```text
-414018C0BBB8C0A70A80BF570AA32CCB2C0B3951
-```
-
-The [public key](keys/wave-release-signing.asc), identity
-`Wave VPN Releases <vesselwave@protonmail.com>`, expires on 2028-10-21.
-Publish this fingerprint through a separately trusted maintainer channel before
-public distribution. A successful signature check identifies the signing key;
-it does not establish that release readiness or platform verification is complete.
-
-Run `bash scripts/release.sh` from a clean tagged Linux checkout for an unsigned
-candidate, or `bash scripts/release.sh --sign-key FULL_FINGERPRINT` to sign using
-the maintainer key. GPG obtains any required passphrase privately; no
-private key is created, exported or included. This does not publish anything.
-Artifacts include source, binaries/notices, checksums and source/toolchain records.
-The signed mode also exports the public key and verifies the resulting signature.
-
-Users verify downloaded files with:
+## Verifying a download
 
 ```sh
 bash scripts/verify-release.sh wave-signing-key.asc wave-SHA256SUMS \
-  wave-SHA256SUMS.asc TRUSTED_FULL_FINGERPRINT
+  wave-SHA256SUMS.asc 414018C0BBB8C0A70A80BF570AA32CCB2C0B3951
 ```
 
-Get the fingerprint through a separately trusted maintainer channel. The script
-uses an isolated keyring, checks that fingerprint, verifies the checksum signature
-and hashes every listed archive. A key downloaded beside an archive does not by
-itself establish trust. Reproducible compilation remains a separate claim.
+The script uses a throwaway keyring, checks the fingerprint, verifies the checksum signature and hashes every listed archive. Take the fingerprint from [SECURITY.md](../SECURITY.md), the keyserver or the website, not from the download. Reproducible builds are a separate, not-yet-made claim.
+
+## Cutting a candidate (maintainers)
+
+From a clean, tagged Linux checkout:
+
+```sh
+bash scripts/release.sh                                # unsigned candidate
+bash scripts/release.sh --sign-key FULL_FINGERPRINT    # signed with the maintainer key
+```
+
+It builds source and binary archives with notices, checksums and source and toolchain records. Signed mode also exports the public key and verifies its own signature. GnuPG asks for any passphrase privately; no private key is created, exported or included, and nothing is published.

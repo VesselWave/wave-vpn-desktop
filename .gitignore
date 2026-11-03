@@ -12,3 +12,11 @@ __pycache__/
 
 # Automatic local credential fallback
 account.json
+
+# Private release/test inputs and archived references
+/.reference/
+/old/
+*.pcap
+*.pcapng
+*.key
+*.pfx

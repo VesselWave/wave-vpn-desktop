@@ -1,6 +1,16 @@
-# Source provenance
+# Provenance
 
-Both applications use GPL-3.0-or-later. This repository's `LICENSE` file contains GPLv3. Preserve the notices below when distributing source or binaries.
+## In short
+
+- **License:** GPL-3.0-or-later. Keep the notices below when you distribute source or binaries.
+- **Protocol:** written new in Kotlin and Rust from AirVPN's official, GPL-licensed Eddie and Eddie for Android sources, pinned to exact commits below. This isn't a formal clean-room process or a third-party legal audit.
+- **Copied data:** only the pinned Eddie provider definition (`protocol-data/AirVPN.json`) and a public example manifest. No account data.
+- **Reused design:** the maintainer's own authored UI (Compose screens and theme, desktop icons) and the Geist fonts (SIL OFL) and Lucide-derived icons (ISC). Everything else, including storage, tunnels and tests, was written new.
+- **Excluded:** the archived upstream desktop project has no license, so none of its backend, tests, helper, packaging or inherited GUI code is used.
+- **Crypto honesty:** AirVPN's sign-in wire format is RSA plus AES-CBC without a separate MAC, matching Eddie. It isn't authenticated encryption, and we don't claim it is.
+- **Linux networking:** uses the distribution's `wg`, `ip` and `nft` tools, checked against Eddie's Linux sources; no source text copied.
+
+The sections below are the detailed record.
 
 ## Protocol references
 

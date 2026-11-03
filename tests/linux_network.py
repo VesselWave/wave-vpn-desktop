@@ -57,8 +57,10 @@ def main(binary):
     run("ip", "-n", "peer", "address", "add", "192.168.78.2/24", "dev", "physical1")
     run("ip", "-n", "peer", "-6", "address", "add", "2001:db8:77::2/64", "dev", "physical1", "nodad")
     run("ip", "-6", "route", "add", "default", "via", "2001:db8:77::2")
-    # Binding a private resolver file prevents modification of the VM's resolver.
-    resolver = Path("/run/test-resolv.conf")
+    # /etc is already a private overlay. Keep a regular resolv.conf renameable:
+    # bind-mounting over it would make the file backend fail with EBUSY.
+    # Symlink targets outside /etc still need a private backing file.
+    resolver = Path("/etc/resolv.conf") if resolver_target == Path("/etc/resolv.conf") else Path("/run/test-resolv.conf")
     resolver.write_text("nameserver 203.0.113.53\n")
     resolver.chmod(0o644)
     original_resolver = resolver.read_bytes()
@@ -66,7 +68,8 @@ def main(binary):
         assert str(resolver_target).startswith("/run/")
         resolver_target.parent.mkdir(parents=True, exist_ok=True)
         resolver_target.touch()
-    run("mount", "--bind", str(resolver), str(resolver_target))
+    if resolver != resolver_target:
+        run("mount", "--bind", str(resolver), str(resolver_target))
     # Config lookup is private too, even if the VM has an installed persistent lock.
     if Path("/etc/wave-vpn").exists():
         run("mount", "-t", "tmpfs", "tmpfs", "/etc/wave-vpn")
@@ -439,6 +442,8 @@ while True: time.sleep(60)
     print("PASS worker crash protection and recovery; unrelated firewall preserved", flush=True)
     import pwd
     resolve_user=pwd.getpwnam("systemd-resolve")
+    # A regular-file resolver host never created resolved's runtime directory.
+    Path("/run/systemd/resolve").mkdir(parents=True, exist_ok=True)
     os.chown("/run/systemd/resolve",resolve_user.pw_uid,resolve_user.pw_gid)
     os.chown(resolver_target,resolve_user.pw_uid,resolve_user.pw_gid)
     Path("/run/dbus").mkdir(exist_ok=True)
