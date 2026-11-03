@@ -20,7 +20,8 @@ connect/cancel/switch/retry/stop, tray, sign-out and PAM login remain unqualifie
 the attempted connection did not establish a final Connected result. See the
 dated verification record. No production source correction followed this check.
 
-Before publishing, record results in VERIFICATION.md for:
+The v0.1.0 experimental prerelease explicitly retains the gaps below. Before a
+production-qualified release, record results in VERIFICATION.md for:
 
 - Actual GUI sign-in/restore/sign-out, wrong account vs unreachable bootstrap,
   recovery before sign-in, device selection, connect/cancel/switch, retry and stop.

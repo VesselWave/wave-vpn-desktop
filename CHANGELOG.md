@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — 0.1.0
+## 0.1.0 — 2026-11-02 (experimental prerelease)
 
 - Independent GPL-3.0-or-later Rust/Iced WireGuard client for AirVPN with compact
   account, server selection, Network Lock, status/logs and tray workflows.
@@ -14,5 +14,6 @@ Authenticated backend and local-peer tests pass in the environments documented
 in [VERIFICATION.md](docs/VERIFICATION.md). Remaining GUI/platform/lifecycle gates
 are tracked in [RELEASE-GATES.md](docs/RELEASE-GATES.md).
 
-No public production release has been published. Boot autoconnect, advanced
+This is an experimental prerelease, with unresolved qualification gates. See
+[v0.1.0 release notes](docs/RELEASE-v0.1.0.md). Boot autoconnect, advanced
 networking UI, additional protocols and other desktop VPN backends are deferred.
