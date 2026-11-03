@@ -64,5 +64,5 @@ Existing lab: lab host Ubuntu VM113 and Fedora VM104, plus Mac Fedora KDE and De
 Xfce guests; see lab/README.md in the repository. Ubuntu's documented .34 SSH
 address timed out during this pass; all local Lima guests were stopped. Request
 current VM access before live testing. A spare Linux laptop with local console
-is needed for physical sleep testing. See [release gates](RELEASE-GATES.md),
-[verification](VERIFICATION.md) and [support](SUPPORT.md).
+is needed for physical sleep testing. See [release gates](../RELEASE-GATES.md),
+[verification](../VERIFICATION.md) and [support](../SUPPORT.md).

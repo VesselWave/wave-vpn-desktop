@@ -15,12 +15,18 @@ pub fn setup(app: &mut Wave) {
     let mut m =
         wave_protocol::parse_manifest(include_str!("../protocol-data/fixtures/eddie-manifest.xml"))
             .unwrap();
-    m.servers.truncate(3);
-    for (s, (name, code, city, load, ping)) in m.servers.iter_mut().zip([
+    let sample = [
         ("Alhena", "nl", "Amsterdam", 24, 18),
         ("Vega", "de", "Frankfurt", 42, 30),
+        ("Castor", "ch", "Zurich", 31, 26),
+        ("Rigel", "se", "Stockholm", 18, 41),
+        ("Deneb", "gb", "London", 55, 22),
+        ("Mirfak", "ca", "Toronto", 37, 88),
         ("Sirius", "us", "New York", 68, 95),
-    ]) {
+        ("Antares", "sg", "Singapore", 46, 170),
+    ];
+    m.servers.truncate(sample.len());
+    for (s, (name, code, city, load, ping)) in m.servers.iter_mut().zip(sample) {
         s.name = name.into();
         s.country = code.into();
         s.location = city.into();
@@ -55,6 +61,8 @@ pub fn setup(app: &mut Wave) {
             app.tx_rate = 320_000.;
             app.connections = 1;
             app.guarded = true;
+            let verified = wave_protocol::checks::Outcome::Verified;
+            app.checks = wave_protocol::checks::Results { ipv4: verified, ipv6: verified, dns: verified };
         }
         Ok("diagnostics") => {
             app.tab = Tab::Logs;

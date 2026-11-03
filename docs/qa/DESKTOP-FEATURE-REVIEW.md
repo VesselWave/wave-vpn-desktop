@@ -2,7 +2,7 @@
 
 Recommendation: finish a dependable, small Linux WireGuard client before adding
 advanced settings. The user authorized implementation of all five must-finish items after this
-review. Advanced features below remain outside the implementation scope. The accepted surface in [PARITY.md](PARITY.md) remains in force.
+review. Advanced features below remain outside the implementation scope. The accepted surface in [PARITY.md](../PARITY.md) remains in force.
 Android is outside this review.
 
 ## Comparison baseline
@@ -48,7 +48,7 @@ These are not missing features to reimplement:
 
 Authenticated backend and isolated packet checks already pass on the documented
 Ubuntu VM. That evidence does not establish every interactive or OS lifecycle
-workflow. See [VERIFICATION.md](VERIFICATION.md) for the exact limits.
+workflow. See [VERIFICATION.md](../VERIFICATION.md) for the exact limits.
 
 ## Must finish before a public desktop release
 
@@ -150,6 +150,6 @@ controls.
 Provider identity/DNS challenges, actual firewall status reconciliation, recovery
 before a new connection, cancellable setup/backoff, support-report preview/copy/
 export and signed-candidate verification are now implemented. Verification and
-remaining release gates are tracked in [VERIFICATION.md](VERIFICATION.md) and
-[RELEASE-GATES.md](RELEASE-GATES.md). Implementation does not itself complete
+remaining release gates are tracked in [VERIFICATION.md](../VERIFICATION.md) and
+[RELEASE-GATES.md](../RELEASE-GATES.md). Implementation does not itself complete
 physical suspend, architecture coverage, release signing or a public contact.

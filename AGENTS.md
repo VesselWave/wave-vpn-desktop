@@ -9,4 +9,4 @@
   behavior from explicitly licensed official references and record those sources.
 - Never commit credentials, private profiles, signing keys, local SDK paths,
   reference checkouts or build outputs.
-- Run the checks documented in README.md after relevant changes.
+- Run the checks documented in CONTRIBUTING.md after relevant changes.

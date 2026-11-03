@@ -1,127 +1,91 @@
-# Wave VPN for Linux
+<p align="center">
+  <img src="docs/brand/cover.png" alt="Wave VPN: an open-source WireGuard client for AirVPN on Android and Linux." width="100%">
+</p>
 
-Unofficial AirVPN desktop client, built with Rust and Iced. GPLv3 or later;
-not affiliated with AirVPN.
+<p align="center">
+  <a href="https://github.com/VesselWave/wave-vpn-desktop/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/VesselWave/wave-vpn-desktop?include_prereleases&amp;style=flat-square&amp;color=2f6bff"></a>
+  <a href="LICENSE"><img alt="License: GPL-3.0-or-later" src="https://img.shields.io/badge/license-GPL--3.0--or--later-2f6bff?style=flat-square"></a>
+  <img alt="Linux x86_64" src="https://img.shields.io/badge/Linux-x86__64-2f6bff?style=flat-square">
+</p>
 
-This repository builds independently. See [provenance](docs/PROVENANCE.md) for
-pinned Eddie references and authored presentation assets.
+An unofficial WireGuard client for [AirVPN](https://airvpn.org) on the Linux desktop. Sign in with your AirVPN account, pick a server and connect, with a Network Lock firewall that keeps traffic inside the tunnel. Open source, written in Rust, with signed releases.
 
-## Experimental release
+**[Download from vpn.vwave.me](https://vpn.vwave.me)** · [Release notes](docs/RELEASE-v0.1.0.md) · [Android app](https://github.com/VesselWave/wave-vpn-mobile)
 
-[v0.1.0 release notes](docs/RELEASE-v0.1.0.md) describe the known privacy and
-qualification limits. See [installation and support](docs/SUPPORT.md) and the
-[public-release checklist](docs/PUBLIC-RELEASE-CHECKLIST.md) before testing or
-sharing a build. This is not production-qualified VPN protection.
+<p align="center">
+  <img src="docs/screenshots/overview.png" alt="Overview: connected to Amsterdam, with IPv4, IPv6 and DNS verified, live rates and session totals" width="49%">
+  <img src="docs/screenshots/servers.png" alt="Servers: a sortable table with location, load, users, ping and score, plus a Best server choice" width="49%">
+</p>
 
-## Build and install
+- Sign in with your AirVPN account; credentials go to your desktop keyring
+- Best-server choice, or a sortable server table with search, favorites and countries
+- **Network Lock**: an nftables firewall that blocks traffic outside the tunnel, and stays on after Disconnect, Quit or a crash until you turn it off
+- Checks every connection: AirVPN confirms the tunnel's IPv4 and IPv6 identity and that your DNS reaches AirVPN
+- **Recover** undoes Wave's own DNS and tunnel changes after a failure, even before you sign in
+- Tray indicator, connection log and a reviewed support report with nothing private in it
+- Imports your existing Eddie account (read-only), and exports WireGuard profiles for other tools
 
-Requires Rust. Linux connections require kernel WireGuard, `wireguard-tools`,
-`iproute2`, `nftables`, `getent` (Ubuntu libc-bin) and systemd. A bare binary installation also needs
-`pkexec` with an authentication agent for first-use helper setup. The installer
-authorizes your desktop user once; subsequent GUI connections need no password.
-DNS supports systemd-resolved, resolvconf, or a backed-up resolv.conf file.
-The UI builds on macOS; VPN connections currently have a Linux backend only.
+> [!WARNING]
+> **v0.1.0 is an experimental test build, not production-qualified VPN protection.**
+> The networking core passes its isolated and live test suites, but the GUI, tray, sign-out, the install and upgrade matrix and physical suspend/resume aren't fully qualified yet. If you turn on Network Lock, it stays on after Disconnect or Quit; turn it off in Settings to get ordinary internet access back. Details: [known limits](docs/RELEASE-v0.1.0.md).
+
+## Install
+
+Built for Ubuntu 24.04 (x86_64, GNOME, systemd). Other distributions may work but aren't tested.
 
 ```sh
-cargo test --all-targets
-cargo clippy --all-targets -- -D warnings
-cargo build --release --locked
-sudo bash scripts/install.sh install
+sudo apt install wireguard-tools iproute2 nftables libsecret-tools
+```
+
+Download the binary and source archives, checksums, signature and key from [vpn.vwave.me](https://vpn.vwave.me), [verify them](#verify-your-download), then:
+
+```sh
+tar -xzf wave-vpn-0.1.0-source.tar.gz
+tar -xzf wave-vpn-0.1.0-x86_64-unknown-linux-gnu.tar.gz
+sudo bash wave-vpn-0.1.0/scripts/install.sh install \
+  "$PWD/wave-vpn-0.1.0-x86_64-unknown-linux-gnu/usr/local/bin"
 wave-vpn-gui
 ```
 
-The GUI runs as your user. A root-owned, socket-activated helper authorizes the
-installing user through kernel peer credentials and launches a worker for a fixed
-set of networking actions. The worker validates structured WireGuard profile/options
-data received through a pipe. It configures its own WireGuard
-interface, policy routes and nftables table, and keeps a root-only recovery record.
-It never accepts shell commands or raw profile directives. Network lock stays
-active after disconnect, failure or worker crash until explicitly disabled. Passwords are prompted privately or entered in the GUI;
-sign-in saves credentials automatically in the system keyring. If secure storage
-is unavailable, the UI warns before sign-in that credentials will be stored in
-plaintext in a private local file. Sign-out removes the saved account.
+The installer adds a small root-owned helper and authorizes your user once, so connecting never asks for a password. Keep the source folder: it holds the uninstaller. Upgrading, uninstalling and recovery are in the [user guide](docs/USER-GUIDE.md).
 
-Generate a private configuration for another VPN manager:
+## Verify your download
 
-```sh
-wave-vpn profile --login YOUR_USERNAME --server SERVER_NAME --output wave.conf
+Every release ships signed SHA-256 checksums. The release key is on [keys.openpgp.org](https://keys.openpgp.org/search?q=414018C0BBB8C0A70A80BF570AA32CCB2C0B3951) and [vpn.vwave.me](https://vpn.vwave.me/#verify):
+
+```text
+4140 18C0 BBB8 C0A7 0A80  BF57 0AA3 2CCB 2C0B 3951
 ```
 
-The new mode-0600 output file contains private keys. Keep it private.
-
-Optional live bootstrap test, using a synthetic invalid account:
-
 ```sh
-cargo test --test protocol live_bootstrap -- --ignored
+gpg --recv-keys 414018C0BBB8C0A70A80BF570AA32CCB2C0B3951
+gpg --verify wave-vpn-0.1.0-x86_64-unknown-linux-gnu-SHA256SUMS.asc \
+             wave-vpn-0.1.0-x86_64-unknown-linux-gnu-SHA256SUMS
+sha256sum --ignore-missing -c wave-vpn-0.1.0-x86_64-unknown-linux-gnu-SHA256SUMS
 ```
 
-## Focused scope
+If the fingerprint differs from this one, from [SECURITY.md](SECURITY.md) and from the website, don't install; report it privately.
 
-Keep simple sign-in/sign-out with automatic secure storage, read-only Eddie import,
-server search/favorites, connect/reconnect, Network Lock, status/logs and tray.
-Settings have two tabs and five preferences. Advanced routing, forwarding, DNS
-and transport tuning are outside the desktop UI; boot autoconnect is deferred.
-See [scope](docs/PARITY.md).
+## How it stays safe
 
-When enabled, Network Lock stays on after Disconnect, Quit and Recover.
-The toggle also works during an active tunnel and remembers your confirmed
-choice. To restore normal internet access, turn it off in Settings, or use
-`sudo wave-vpn lock-disable`. Enabling it while disconnected needs
-no additional service installation. The networking helper and boot-persistent
-lock are separate. Ordinary lock survives app exit, but reboot persistence
-requires the optional `lock-install` / `lock-enable` CLI service. LAN access and
-physical-interface ping bypass are off by default. Loopback, DHCP/IPv6 neighbor
-discovery, tunnel transport and pinned AirVPN bootstrap endpoints are permitted.
+The app runs as your user. Networking goes through a socket-activated helper that accepts only a fixed set of actions from the user it authorized, never shell commands or raw config. It sets up its own WireGuard interface, routes and nftables table, and keeps a root-only recovery record so a crash can always be undone. Wave VPN talks only to AirVPN: no analytics, no telemetry, and support reports are never uploaded. Details in the [user guide](docs/USER-GUIDE.md) and [SECURITY.md](SECURITY.md).
 
-Eddie import accepts XML and v1/v2 profiles with default/password/keyring
-protection. Linux keyring import reads Eddie's existing Secret Service item and
-does not modify it. Imported credentials fill the sign-in form; successful
-sign-in saves them automatically. Advanced Eddie settings are omitted.
-Install `libsecret-tools` and unlock your desktop keyring for saved accounts.
+## Building
 
-Authenticated backend checks pass on Ubuntu GNOME with Comae and Orion: real
-IPv4/IPv6 traffic, AirVPN DNS, switching/reconnect and Network Lock after
-disconnect/crash/Recover. Exact test scope and remaining UI/platform limits are
-in the [verification record](docs/VERIFICATION.md).
-
-Run the isolated networking checks **inside a Linux test VM**:
+Needs a recent stable Rust. VPN connections need Linux; the UI also builds on macOS.
 
 ```sh
-cargo build --bins
-sudo python3 tests/linux_network.py target/debug/wave-vpn
-sudo env WAVE_TEST_SERVICE=1 python3 tests/linux_network.py target/debug/wave-vpn
+cargo test --locked --all-targets
+cargo clippy --locked --all-targets -- -D warnings
+cargo build --release --locked
+sudo bash scripts/install.sh install
 ```
 
-The runner creates private mount/network/PID namespaces and an /etc overlay.
-It does not require AirVPN credentials or internet access.
+More, including the isolated network test suite, in [CONTRIBUTING.md](CONTRIBUTING.md); test evidence is indexed in [docs/](docs/README.md).
 
-[Verification record](docs/VERIFICATION.md). Version 0.1.0 is an experimental prerelease. See [release notes](docs/RELEASE-v0.1.0.md) for known failures and qualification limits.
+---
 
-## Connection checks and recovery
-
-The app checks the advertised AirVPN tunnel identity for each configured IP
-family and verifies that AirVPN received a fresh challenge through your system
-DNS. Results appear in Overview. Checks repeat periodically; failed checks stop
-the connection and auto-reconnect uses cancellable backoff. A check-service
-outage is shown as unavailable, not as proof of a leak. Network Lock follows
-its last explicit setting through recovery and retry.
-
-If sign-in cannot reach AirVPN, **Recover** in Overview is available before you
-sign in. It restores only Wave's journaled DNS/tunnel resources, keeping an
-enabled lock. Bootstrap uses pinned direct-IP endpoints and does not require
-working public DNS. Account rejection is shown separately from network failure.
-If Eddie left its own DNS/firewall state behind, recover that in Eddie first;
-Wave does not reset other applications' networking.
-
-**Logs → Support report** previews safe diagnostics and lets you copy or save
-exactly that report. It includes check/protection results and tool availability,
-with fixed failure categories. Accounts, keys, addresses and raw logs are omitted;
-there is no automatic upload. `wave-vpn diagnostics` offers the CLI metadata
-snapshot; `wave-vpn service-client network-status` queries actual firewall and
-recovery state without changing networking or requesting new authorization.
-
-[Release gates and signature verification](docs/RELEASE-GATES.md) distinguish
-implemented features from the remaining public-release requirements.
+GPL-3.0-or-later. Independent project, not affiliated with or endorsed by AirVPN. Report security issues privately to **vesselwave@protonmail.com** ([security policy](SECURITY.md)).
 
 ## Published history privacy
 

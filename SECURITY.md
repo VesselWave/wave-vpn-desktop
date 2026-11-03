@@ -8,8 +8,8 @@ environments are tracked in docs/PARITY.md and docs/VERIFICATION.md.
 Report vulnerabilities privately to **vesselwave@protonmail.com**. Include the
 app version, operating system and reproduction steps. Do not post passwords,
 private profiles, WireGuard keys, account identifiers or unredacted logs in public
-issues. This is the maintainer-designated contact; email delivery has not been
-independently tested. No response-time commitment is currently offered.
+issues. This is the maintainer's monitored address. No response-time commitment is
+currently offered.
 
 Release downloads use the OpenPGP key **Wave VPN Releases
 <vesselwave@protonmail.com>**, fingerprint:

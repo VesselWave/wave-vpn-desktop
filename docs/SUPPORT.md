@@ -129,12 +129,12 @@ at HEAD. It builds/tests and creates binary/source archives, dependency/toolchai
 records and SHA-256 checksums under `target/distribution`. These are unsigned
 candidates. No artifact should be advertised as production-ready until all parity
 gates pass. The maintainer signing identity and private reporting contact are
-recorded in SECURITY.md. Publish the fingerprint through a separately trusted
-channel and confirm inbox delivery and signing-key backup before distribution.
+recorded in SECURITY.md; the fingerprint is also published on keys.openpgp.org
+and https://vpn.vwave.me.
 Use `bash scripts/release.sh --sign-key FULL_FINGERPRINT` for a signed candidate,
 then independently verify it with `scripts/verify-release.sh`. The [v0.1.0 experimental prerelease](https://github.com/VesselWave/wave-vpn-desktop/releases/tag/v0.1.0)
-is published in the currently access-restricted repository. Public accessibility
-and inbox delivery remain separate unconfirmed gates.
+is published in this repository, which is currently private; its download links
+work once the repository is public.
 
 ## Sign-in fails after a broken VPN session
 
