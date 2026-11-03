@@ -8,7 +8,8 @@ sums=$2
 signature=$3
 fingerprint=$(printf '%s' "$4" | tr -d ' ' | tr '[:lower:]' '[:upper:]')
 [[ "$fingerprint" =~ ^[A-F0-9]{40}$ || "$fingerprint" =~ ^[A-F0-9]{64}$ ]] || { echo 'A full trusted fingerprint is required' >&2; exit 1; }
-keyhome=$(mktemp -d)
+# Keep GnuPG socket paths below macOS's Unix-domain socket length limit.
+keyhome=$(mktemp -d /tmp/wave-verify.XXXXXXXX)
 trap 'rm -rf -- "$keyhome"' EXIT
 chmod 700 "$keyhome"
 gpg --homedir "$keyhome" --batch --quiet --import "$public_key"

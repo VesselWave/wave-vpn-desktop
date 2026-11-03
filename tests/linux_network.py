@@ -443,26 +443,49 @@ while True: time.sleep(60)
     os.chown(resolver_target,resolve_user.pw_uid,resolve_user.pw_gid)
     Path("/run/dbus").mkdir(exist_ok=True)
     run("dbus-daemon", "--system", "--fork", "--nopidfile")
-    dns_log = open("/run/resolved-test.log", "w")
-    dns_service = subprocess.Popen(["/usr/lib/systemd/systemd-resolved"], stdout=dns_log, stderr=dns_log)
-    for _ in range(30):
-        if subprocess.run(["resolvectl", "status"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
-            break
-        time.sleep(.1)
-    else:
-        raise AssertionError("isolated resolved service failed: " + Path("/run/resolved-test.log").read_text())
-    original_resolver = resolver.read_bytes()
-    for mode in ["systemd-resolved", "resolvconf"]:
-        resolved = json.loads(json.dumps(request))
-        resolved["options"]["dns_mode"] = mode
-        proc, events = worker(resolved)
-        connected(proc, events)
-        assert "10.77.0.1" in run("resolvectl", "dns", "wavevpn0")
-        assert "~." in run("resolvectl", "domain", "wavevpn0")
-        disconnect(proc)
-        stopped(proc)
-        print(f"PASS real isolated {mode} configuration and cleanup", flush=True)
-    dns_service.terminate()
+    with open("/run/resolved-test.log", "w") as dns_log:
+        dns_service = subprocess.Popen(["/usr/lib/systemd/systemd-resolved"], stdout=dns_log, stderr=dns_log)
+        try:
+            # Disable paging explicitly: systemd 259 may invoke less when both
+            # streams are /dev/null, making a healthy client's exit be SIGPIPE.
+            # Keep client errors distinct from daemon startup/exit failures.
+            resolver_deadline = time.monotonic() + 45
+            readiness_error = "no client result"
+            while time.monotonic() < resolver_deadline:
+                if dns_service.poll() is not None:
+                    raise AssertionError("isolated resolved exited: " + Path("/run/resolved-test.log").read_text())
+                try:
+                    probe = subprocess.run(["resolvectl", "--no-pager", "status"],
+                                           stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+                                           timeout=min(2, max(.1, resolver_deadline - time.monotonic())))
+                    if probe.returncode == 0:
+                        break
+                    readiness_error = f"client exit {probe.returncode}: {probe.stderr}"
+                except subprocess.TimeoutExpired:
+                    readiness_error = "client timed out"
+                time.sleep(.1)
+            else:
+                raise AssertionError("isolated resolved not ready (" + readiness_error + "): "
+                                     + Path("/run/resolved-test.log").read_text())
+            original_resolver = resolver.read_bytes()
+            for mode in ["systemd-resolved", "resolvconf"]:
+                resolved = json.loads(json.dumps(request))
+                resolved["options"]["dns_mode"] = mode
+                proc, events = worker(resolved)
+                connected(proc, events)
+                assert "10.77.0.1" in run("resolvectl", "--no-pager", "dns", "wavevpn0")
+                assert "~." in run("resolvectl", "--no-pager", "domain", "wavevpn0")
+                disconnect(proc)
+                stopped(proc)
+                print(f"PASS real isolated {mode} configuration and cleanup", flush=True)
+        finally:
+            if dns_service.poll() is None:
+                dns_service.terminate()
+                try:
+                    dns_service.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    dns_service.kill()
+                    dns_service.wait(timeout=3)
     config = Path("/etc/wave-vpn")
     config.mkdir(exist_ok=True)
     config.chmod(0o700)

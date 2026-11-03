@@ -88,7 +88,7 @@ sudo env WAVE_TEST_SERVICE=1 python3 tests/linux_network.py target/debug/wave-vp
 The runner creates private mount/network/PID namespaces and an /etc overlay.
 It does not require AirVPN credentials or internet access.
 
-[Verification record](docs/VERIFICATION.md). This is an unpublished development build.
+[Verification record](docs/VERIFICATION.md). Version 0.1.0 is an experimental prerelease. See [release notes](docs/RELEASE-v0.1.0.md) for known failures and qualification limits.
 
 ## Connection checks and recovery
 

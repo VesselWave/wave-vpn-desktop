@@ -1,10 +1,14 @@
 # Installation and support
 
-Only Ubuntu 24.04 ARM64 (kernel 6.8, GNOME 46 on X11, local VM) has local networking evidence.
-It is a development test environment, not a supported production release matrix.
-Ubuntu x86_64 is a CI target; the workflow must actually run before claiming its
-results. Other distributions, independent resolvconf implementations, Wayland
-tray hosts and other architectures are unverified. macOS builds the UI only.
+Ubuntu 24.04 ARM64 GNOME X11 and x86_64 GNOME Wayland have local networking
+and desktop evidence. The x86_64 candidate also has helper-security and normal
+EFI persistent-lock boot checks. Debian ARM64 Xfce and Fedora ARM64 KDE have
+separate namespace-test evidence; this does not establish complete GUI support.
+See VERIFICATION.md for exact binary hashes, failures and remaining gates.
+This is a development test matrix, not a supported production release promise.
+The CI workflow must actually run before claiming hosted CI results. Other
+distributions, independent resolvconf implementations and other architectures
+remain unverified. macOS builds the UI only.
 Windows, OpenVPN and AirVPN account-side port/DDNS management are unsupported.
 
 ## Build and install
@@ -76,7 +80,7 @@ WAVE_SERVICE_TEST_VM=1 python3 scripts/test-service.py
 sudo env WAVE_TEST_SERVICE=1 python3 tests/linux_network.py target/debug/wave-vpn
 ```
 
-GNOME Secret Service and installed Eddie 2.26.2 CLI profile interoperability are
+GNOME Secret Service and installed Eddie 2.26.2 / 2.27.2 CLI profile interoperability are
 verified with synthetic credentials. Reproduce using an unlocked disposable VM:
 
 ```sh
@@ -90,7 +94,9 @@ ARM64 GUI could not launch on this VM (requires libtiff.so.5); the shipped CLI
 works and is used to save the real test profile. These import tests use synthetic credentials. Separate authenticated
 backend verification passes for dual-stack AirVPN traffic, DNS, switching,
 protected disconnect/crash/recovery and explicit unlock; see VERIFICATION.md.
-GUI retry transactions, reboot/suspend/network changes and Wayland remain unverified. Boot autoconnect is outside the focused scope; ordinary Network Lock
+Final-candidate GUI/account/error coverage, manual PAM keyring unlock and physical
+suspend still need verification. VM reboot/helper checks do not establish physical
+sleep behavior. Boot autoconnect is outside the focused scope; ordinary Network Lock
 does not survive reboot without the optional CLI service.
 
 ## Release candidates
@@ -99,11 +105,12 @@ does not survive reboot without the optional CLI service.
 at HEAD. It builds/tests and creates binary/source archives, dependency/toolchain
 records and SHA-256 checksums under `target/distribution`. These are unsigned
 candidates. No artifact should be advertised as production-ready until all parity
-gates pass and the maintainer establishes a signing key, publishes its fingerprint
-through an independently verifiable channel, signs the checksums (for example,
-`gpg --armor --detach-sign <checksum-file>`) and verifies the signature from a
-fresh environment. Release signing/private reporting contacts require maintainer
-configuration; no signing identity or completed release is claimed.
+gates pass. The maintainer signing identity and private reporting contact are
+recorded in SECURITY.md. Publish the fingerprint through a separately trusted
+channel and confirm inbox delivery and signing-key backup before distribution.
+Use `bash scripts/release.sh --sign-key FULL_FINGERPRINT` for a signed candidate,
+then independently verify it with `scripts/verify-release.sh`. No completed
+public release or inbox-delivery test is claimed.
 
 ## Sign-in fails after a broken VPN session
 
@@ -124,4 +131,4 @@ For support, use Logs → Support report, review it, then copy or save. The repo
 contains no raw logs, addresses or account material. A separate export failure
 never overwrites an existing report. Include OS/version and reproduction steps;
 do not publish profiles or keyring contents. See RELEASE-GATES.md for release
-signature checking and the still-required private vulnerability contact.
+signature checking and the remaining release gates.

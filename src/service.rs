@@ -194,7 +194,7 @@ mod linux {
         systemctl(&["daemon-reload"])?;
         Ok(())
     }
-    fn peer_uid(stream: &UnixStream) -> Result<u32> {
+    pub(crate) fn peer_uid(stream: &UnixStream) -> Result<u32> {
         let mut credentials: libc::ucred = unsafe { std::mem::zeroed() };
         let mut length = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
         let result = unsafe {
@@ -325,8 +325,40 @@ mod linux {
         let active = Arc::new(AtomicUsize::new(0));
         for connection in listener.incoming() {
             let mut stream = connection?;
+            // Bound even rejection writes before processing untrusted peers.
+            stream.set_write_timeout(Some(Duration::from_secs(1)))?;
+            // Authenticate peer UID before reserving bounded worker slots.
+            // Reject unauthorized or unidentifiable peers promptly without
+            // consuming bounded slots for legitimate desktop clients.
+            let uid = match peer_uid(&stream) {
+                Ok(uid) => uid,
+                Err(_) => {
+                    let _ = writeln!(
+                        stream,
+                        "Networking service rejected or could not complete this request"
+                    );
+                    let _ = finish(&mut stream, false);
+                    continue;
+                }
+            };
+            // Read current authorization on every admission; a revoked UID must
+            // not retain access to slots until the broker restarts. handle()
+            // checks again before starting a worker.
+            let authorized = uid == 0 || config().is_ok_and(|current| uid == current.uid);
+            if !authorized {
+                let _ = writeln!(
+                    stream,
+                    "This user is not authorized for Wave VPN networking"
+                );
+                let _ = finish(&mut stream, false);
+                continue;
+            }
             if active.fetch_add(1, Ordering::AcqRel) >= 8 {
                 active.fetch_sub(1, Ordering::AcqRel);
+                let _ = writeln!(
+                    stream,
+                    "Networking service rejected or could not complete this request"
+                );
                 let _ = finish(&mut stream, false);
                 continue;
             }
@@ -402,4 +434,17 @@ pub fn serve() -> Result<()> {
 #[cfg(not(target_os = "linux"))]
 pub fn client(_action: &str) -> Result<()> {
     anyhow::bail!("Networking service requires Linux")
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::linux::*;
+    use std::os::unix::net::UnixStream;
+
+    #[test]
+    fn peer_uid_identifies_local_socket_pair() {
+        let (s1, _s2) = UnixStream::pair().unwrap();
+        let uid = peer_uid(&s1).unwrap();
+        assert_eq!(uid, unsafe { libc::geteuid() });
+    }
 }
