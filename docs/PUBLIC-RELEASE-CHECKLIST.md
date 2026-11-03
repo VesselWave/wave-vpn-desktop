@@ -14,8 +14,11 @@ as community software not developed by AirVPN. No approval or endorsement is cla
   visibility was PRIVATE when checked on 2026-11-02. See [visibility preparation](PUBLIC-VISIBILITY-REVIEW.md). Review history, assets,
   licenses, workflows and contact details before changing visibility; then verify
   source/download links without repository membership.
-- [ ] Confirm private security inbox receipt and recoverable backups of both
-  signing identities; publish fingerprints through an independently trusted channel.
+- [x] Confirm private security inbox receipt and recoverable backups of both
+  signing identities (maintainer confirmed 2026-11-02: controls and receives the
+  security inbox; encrypted backups exist for the OpenPGP and APK signing keys).
+- [x] Publish signing fingerprints through an independently trusted channel:
+  keys.openpgp.org (email identity verified) and https://vpn.vwave.me/#verify.
 - [ ] Complete the exact shipped artifact's basic install/connect/disconnect/recovery
   smoke test and record its hash, platform, failures and cleanup. Historical builds
   are not substitutes for this test.
@@ -29,6 +32,12 @@ Keep packet captures and credentials private. Record artifact hash, source revis
 OS/security patch, scenario, positive controls, expected/observed result and cleanup.
 Never convert a failed or unqualified run into a pass by narrowing its label later.
 A signed artifact establishes identity, not production qualification.
+
+## Current preflight evidence
+
+[Fresh public-release preflight](RELEASE-PUBLIC-PREFLIGHT.md) records the
+source-release authenticated run, including its second-server DNS-query failure.
+The full run did not pass. Android artifact smoke was blocked by AVD-in-use.
 
 ## New physical evidence
 

@@ -21,11 +21,28 @@ publish account data or a claim that every possible secret has been excluded.
 - Local release-verifier tests pass with tampered files and wrong fingerprints
   rejected. Documentation links and git diff whitespace checks pass.
 
+## GitHub surface review follow-up
+
+Reviewed the single merged PR's title/body: release scope, warnings and test
+summaries; no account values or private profiles were present. There are no
+issue/review comments or Actions caches. Targeted private-key/GitHub-token/AWS-key
+patterns matched no content in 144 log files across 15 workflow runs; all log
+archives were available. This is not a comprehensive arbitrary-secret detector.
+The retained Linux candidate artifact contains unsigned release archives for
+local signing; published manifests identify the source/binary archives.
+
+Source archive filename checks found no .env, account.json, local.properties,
+archived-reference folders, keystores or raw captures, and confirmed LICENSE
+and provenance records are included. Repository history still contains lab LAN
+addresses, usernames, device identifiers and local paths. These are recorded
+operational metadata, not a promise that all personal metadata has been removed.
+
 ## Still required before visibility change
 
-- [ ] Review repository description, collaborator access, issues/PR comments,
-  Actions logs/artifacts/caches, release assets and Git history for personal or
-  account information. The targeted local pattern scan does not cover these surfaces.
+- [x] Review descriptions, PR text, available logs, artifact inventory, release
+  source archives and local history with the scope above.
+- [ ] Maintainer accepts exposure of existing lab metadata and reviews collaborator
+  permissions before the visibility transition. Public access is not enabled yet.
 - [ ] Decide whether recorded lab LAN addresses, usernames, device identifiers and
   detailed test evidence are acceptable public information. They exist in lab or
   verification records and have not been silently rewritten out of release history.

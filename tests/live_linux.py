@@ -130,9 +130,17 @@ def main(binary, requests):
         if any(':' in a for a in request['profile']['addresses']):
             exit6 = public_ip(v6=True)
             assert exit6 and exit6.version == 6, 'IPv6 cannot traverse tunnel'
+        def answered(dns, *flags):
+            answer = run('dig', '+time=3', '+tries=1', '+short', *flags, '@' + dns, 'example.com', 'A', check=False).stdout
+            return any(line and line[0].isdigit() for line in answer.splitlines())
         for dns in request['profile']['dns']:
-            answer = run('dig', '+time=3', '+tries=1', '+short', '@' + dns, 'example.com', 'A').stdout
-            assert any(line and line[0].isdigit() for line in answer.splitlines()), 'Tunnel DNS query failed'
+            if not answered(dns):
+                # Still a failure; follow-up probes only classify it. Report the
+                # address family, not the private resolver address.
+                family = 'IPv6' if ':' in dns else 'IPv4'
+                udp_retry = answered(dns)
+                tcp_retry = answered(dns, '+tcp')
+                raise AssertionError(f'Tunnel DNS query failed ({family} resolver; UDP retry {udp_retry}, TCP retry {tcp_retry})')
         protection()
         assert public_ip(physical=True) is None, 'Forced physical HTTPS bypass escaped lock'
         print('PASS authenticated tunnel: changed IPv4 exit, IPv6 exit, AirVPN DNS, blocked forced physical HTTP/HTTPS/DNS', flush=True)
