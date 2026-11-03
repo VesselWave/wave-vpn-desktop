@@ -3,7 +3,7 @@
 > **In short:** What was checked before this repository can be made public: a targeted secret scan of history (none found), workflow permissions and what's still open. Not a full secret audit.
 
 Maintainer choice: prepare this existing repository for public visibility.
-Visibility remains PRIVATE. This document is preparation, not authorization to
+The repository was made public on 2026-11-03. This document was preparation, not authorization to
 publish account data or a claim that every possible secret has been excluded.
 
 ## Completed checks

@@ -12,10 +12,10 @@ as community software not developed by AirVPN. No approval or endorsement is cla
 - [x] Publish v0.1.0 tagged source, notices, binaries and signed checksum manifest;
   hosted checks and downloaded-asset verification passed in the publication record.
 - [x] Provide installation, verification, known-limit and private-reporting guidance.
-- [ ] Make source and downloads accessible to forum readers. GitHub repository
-  visibility was PRIVATE when checked on 2026-11-02. See [visibility preparation](PUBLIC-VISIBILITY-REVIEW.md). Review history, assets,
-  licenses, workflows and contact details before changing visibility; then verify
-  source/download links without repository membership.
+- [x] Make source and downloads accessible to forum readers. The maintainer made
+  the repository public on 2026-11-03, aware that history contains lab usernames,
+  local network paths and device identifiers (see [visibility preparation](PUBLIC-VISIBILITY-REVIEW.md)).
+  Release pages, binaries and source archives were then fetched without signing in.
 - [x] Confirm private security inbox receipt and recoverable backups of both
   signing identities (maintainer confirmed 2026-11-02: controls and receives the
   security inbox; encrypted backups exist for the OpenPGP and APK signing keys).
