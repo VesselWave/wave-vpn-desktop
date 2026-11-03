@@ -62,7 +62,11 @@ pub fn setup(app: &mut Wave) {
             app.connections = 1;
             app.guarded = true;
             let verified = wave_protocol::checks::Outcome::Verified;
-            app.checks = wave_protocol::checks::Results { ipv4: verified, ipv6: verified, dns: verified };
+            app.checks = wave_protocol::checks::Results {
+                ipv4: verified,
+                ipv6: verified,
+                dns: verified,
+            };
         }
         Ok("diagnostics") => {
             app.tab = Tab::Logs;
