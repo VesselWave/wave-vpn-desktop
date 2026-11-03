@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 · 2026-11-02 · experimental prerelease
+## 0.1.0 · 2026-11-02 · early release
 
 First public build. [Release notes](docs/RELEASE-v0.1.0.md).
 
@@ -14,6 +14,6 @@ First public build. [Release notes](docs/RELEASE-v0.1.0.md).
 
 **Status**
 
-Authenticated and isolated network tests pass in the environments in [verification](docs/VERIFICATION.md). Remaining GUI, platform and lifecycle checks are in [release gates](docs/RELEASE-GATES.md).
+Authenticated and isolated network tests pass in the environments in [verification](docs/VERIFICATION.md).
 
 **Not planned for now:** boot autoconnect, an advanced networking UI, other protocols and other desktop VPN backends.

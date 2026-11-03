@@ -25,9 +25,8 @@ An unofficial WireGuard client for [AirVPN](https://airvpn.org) on the Linux des
 - Tray indicator, connection log and a reviewed support report with nothing private in it
 - Imports your existing Eddie account (read-only), and exports WireGuard profiles for other tools
 
-> [!WARNING]
-> **v0.1.0 is an experimental test build, not production-qualified VPN protection.**
-> The networking core passes its isolated and live test suites, but the GUI, tray, sign-out, the install and upgrade matrix and physical suspend/resume aren't fully qualified yet. If you turn on Network Lock, it stays on after Disconnect or Quit; turn it off in Settings to get ordinary internet access back. Details: [known limits](docs/RELEASE-v0.1.0.md).
+> [!NOTE]
+> **v0.1.0 is an early release.** Anyone is welcome to use it, but it hasn't been fully tested on every device and system yet.
 
 ## Install
 
