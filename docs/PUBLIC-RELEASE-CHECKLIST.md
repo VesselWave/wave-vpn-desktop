@@ -30,6 +30,13 @@ OS/security patch, scenario, positive controls, expected/observed result and cle
 Never convert a failed or unqualified run into a pass by narrowing its label later.
 A signed artifact establishes identity, not production qualification.
 
+## New physical evidence
+
+[physical test laptop physical baseline](RELEASE-PHYSICAL-LAPTOP.md): exact v0.1.0 staged
+install/uninstall and CLI launch pass on CachyOS; a 39-second physical sleep
+cycle resumes with the existing older helper socket active. Active-tunnel and
+exact-installed-release suspend qualification remain open.
+
 ## Linux qualification still open
 
 - [ ] Exercise exact downloaded x86_64 v0.1.0 binaries on Ubuntu 24.04 GNOME:
