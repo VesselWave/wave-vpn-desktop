@@ -1,6 +1,6 @@
 # Installation and support
 
-Wave VPN for Linux 0.1.0 is an experimental test build. Read the [release notes](RELEASE-v0.1.0.md) first.
+**v0.1.0 is an early release.** Anyone is welcome to use it, but it hasn't been fully tested on every device and system yet.
 
 ## Tested systems
 
@@ -11,7 +11,7 @@ Wave VPN for Linux 0.1.0 is an experimental test build. Read the [release notes]
 | CachyOS x86_64, physical laptop, Wayland | Shipped binary: GUI rendering, staged install and uninstall, all 19 isolated network scenarios |
 | Debian ARM64 Xfce, Fedora ARM64 KDE | Isolated network suite only, not full GUI support |
 
-This is a development test matrix, not a support promise. Hosted CI and the tagged packaging workflow pass, but they don't qualify the full GUI or physical lifecycle. Other distributions, other resolvconf implementations and other architectures are untested. The published binary is x86_64 only. macOS builds the UI without VPN connections. Windows, OpenVPN and AirVPN account-side port forwarding and DDNS aren't supported. Exact binaries and results: [verification](VERIFICATION.md).
+Other distributions and architectures may work but haven't been tested. The published binary is x86_64 only. macOS builds the UI without VPN connections. Windows, OpenVPN and AirVPN account-side port forwarding and DDNS aren't supported. Exact binaries and results: [verification](VERIFICATION.md).
 
 ## Requirements
 

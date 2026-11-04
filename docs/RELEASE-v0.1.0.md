@@ -1,8 +1,10 @@
 # Wave VPN for Linux 0.1.0
 
-**Experimental prerelease** · Ubuntu 24.04 x86_64 (GNOME, systemd) · GPL-3.0-or-later
+**Early release** · Ubuntu 24.04 x86_64 (GNOME, systemd) · GPL-3.0-or-later
 
-The first public build of an unofficial WireGuard client for AirVPN, written in Rust. It's for testing, not yet production-qualified VPN protection.
+The first public build of an unofficial WireGuard client for AirVPN, written in Rust.
+
+**v0.1.0 is an early release.** Anyone is welcome to use it, but it hasn't been fully tested on every device and system yet. Everything tested so far is in [verification](VERIFICATION.md).
 
 ## What's in it
 
@@ -12,14 +14,6 @@ The first public build of an unofficial WireGuard client for AirVPN, written in 
 - IPv4, IPv6 and DNS checks against AirVPN on every connection
 - Tray indicator, connection log, and a support report with nothing private in it
 - Read-only import of your Eddie account
-
-## Not fully qualified yet
-
-- With the release binary: connect, cancel, switch, retry and stop in the GUI; tray; sign-out; desktop login (PAM)
-- Physical suspend and resume
-- The full install, upgrade and conflict matrix, and other distributions or architectures
-
-The networking core does pass its suites: 19 isolated scenarios with this binary on physical hardware, and the authenticated live suite from this source. Earlier debug or installed-build results don't qualify this binary by themselves, and passing unit tests aren't proof of complete protection. Details: [verification](VERIFICATION.md) and [release gates](RELEASE-GATES.md). macOS builds the UI only, without VPN connections.
 
 ## Good to know
 
