@@ -61,7 +61,7 @@ Disconnect and quit Wave VPN, then run the same install command with the new rel
 
 ```sh
 sudo wave-vpn lock-uninstall                   # only if you installed the boot lock
-sudo bash wave-vpn-0.1.0/scripts/install.sh uninstall
+sudo bash wave-vpn-0.1.1/scripts/install.sh uninstall
 ```
 
 The uninstaller removes Wave's binaries, helper and systemd units. It keeps your preferences in `~/.config/wave-vpn`, leaves dependency packages alone, and refuses to run while a recovery record or boot lock is installed.

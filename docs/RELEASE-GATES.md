@@ -1,6 +1,6 @@
 # Release gates
 
-What has to pass before Wave VPN for Linux can be called production-qualified. v0.1.0 ships as an experimental prerelease with the open items below. Results and exact binaries go in [verification](VERIFICATION.md); every candidate must name its exact source tag and tested binaries.
+What has to pass before Wave VPN for Linux can be called production-qualified. Current releases ship as early releases with the open items below. Results and exact binaries go in [verification](VERIFICATION.md); every candidate must name its exact source tag and tested binaries.
 
 **Target platform:** Ubuntu 24.04 with systemd, kernel WireGuard, nftables, Secret Service and GNOME. Other distributions, init systems and platforms are outside the initial promise.
 

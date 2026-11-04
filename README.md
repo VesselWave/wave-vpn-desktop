@@ -10,7 +10,7 @@
 
 An unofficial WireGuard client for [AirVPN](https://airvpn.org) on the Linux desktop. Sign in with your AirVPN account, pick a server and connect, with a Network Lock firewall that keeps traffic inside the tunnel. Open source, written in Rust, with signed releases.
 
-**[Download from vpn.vwave.me](https://vpn.vwave.me)** · [Release notes](docs/RELEASE-v0.1.0.md) · [Android app](https://github.com/VesselWave/wave-vpn-mobile)
+**[Download from vpn.vwave.me](https://vpn.vwave.me)** · [Release notes](docs/RELEASE-v0.1.1.md) · [Android app](https://github.com/VesselWave/wave-vpn-mobile)
 
 <p align="center">
   <img src="docs/screenshots/overview.png" alt="Overview: connected to Amsterdam, with IPv4, IPv6 and DNS verified, live rates and session totals" width="49%">
@@ -26,7 +26,7 @@ An unofficial WireGuard client for [AirVPN](https://airvpn.org) on the Linux des
 - Imports your existing Eddie account (read-only), and exports WireGuard profiles for other tools
 
 > [!NOTE]
-> **v0.1.0 is an early release.** Anyone is welcome to use it, but it hasn't been fully tested on every device and system yet.
+> **Wave VPN is in early release.** Anyone is welcome to use it, but it hasn't been fully tested on every device and system yet.
 
 ## Install
 
@@ -39,10 +39,10 @@ sudo apt install wireguard-tools iproute2 nftables libsecret-tools
 Download the binary and source archives, checksums, signature and key from [vpn.vwave.me](https://vpn.vwave.me), [verify them](#verify-your-download), then:
 
 ```sh
-tar -xzf wave-vpn-0.1.0-source.tar.gz
-tar -xzf wave-vpn-0.1.0-x86_64-unknown-linux-gnu.tar.gz
-sudo bash wave-vpn-0.1.0/scripts/install.sh install \
-  "$PWD/wave-vpn-0.1.0-x86_64-unknown-linux-gnu/usr/local/bin"
+tar -xzf wave-vpn-0.1.1-source.tar.gz
+tar -xzf wave-vpn-0.1.1-x86_64-unknown-linux-gnu.tar.gz
+sudo bash wave-vpn-0.1.1/scripts/install.sh install \
+  "$PWD/wave-vpn-0.1.1-x86_64-unknown-linux-gnu/usr/local/bin"
 wave-vpn-gui
 ```
 
@@ -58,9 +58,9 @@ Every release ships signed SHA-256 checksums. The release key is on [keys.openpg
 
 ```sh
 gpg --recv-keys 414018C0BBB8C0A70A80BF570AA32CCB2C0B3951
-gpg --verify wave-vpn-0.1.0-x86_64-unknown-linux-gnu-SHA256SUMS.asc \
-             wave-vpn-0.1.0-x86_64-unknown-linux-gnu-SHA256SUMS
-sha256sum --ignore-missing -c wave-vpn-0.1.0-x86_64-unknown-linux-gnu-SHA256SUMS
+gpg --verify wave-vpn-0.1.1-x86_64-unknown-linux-gnu-SHA256SUMS.asc \
+             wave-vpn-0.1.1-x86_64-unknown-linux-gnu-SHA256SUMS
+sha256sum --ignore-missing -c wave-vpn-0.1.1-x86_64-unknown-linux-gnu-SHA256SUMS
 ```
 
 If the fingerprint differs from this one, from [SECURITY.md](SECURITY.md) and from the website, don't install; report it privately.

@@ -1,6 +1,6 @@
 # Installation and support
 
-**v0.1.0 is an early release.** Anyone is welcome to use it, but it hasn't been fully tested on every device and system yet.
+**Wave VPN is in early release.** Anyone is welcome to use it, but it hasn't been fully tested on every device and system yet.
 
 ## Tested systems
 

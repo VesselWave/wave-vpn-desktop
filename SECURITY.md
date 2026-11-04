@@ -1,6 +1,6 @@
 # Security
 
-**v0.1.0 is an early release.** Anyone is welcome to use it, but it hasn't been fully tested on every device and system yet. There's no security maintenance promise yet; see [verification](docs/VERIFICATION.md) for what has been tested.
+**Wave VPN is in early release.** Anyone is welcome to use it, but it hasn't been fully tested on every device and system yet. There's no security maintenance promise yet; see [verification](docs/VERIFICATION.md) for what has been tested.
 
 ## Reporting a vulnerability
 

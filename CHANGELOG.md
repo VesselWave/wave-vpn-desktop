@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.1.1 · 2026-11-03 · early release
+
+New look; interface only. [Release notes](docs/RELEASE-v0.1.1.md).
 
 **Changed**
 
