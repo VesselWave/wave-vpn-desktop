@@ -1,26 +1,69 @@
-name: Build tagged prerelease
+name: Release
+# Pushing a tag vX.Y.Z builds, signs, verifies and publishes the GitHub release.
+# The signing secrets live in the protected "release" environment.
 on:
-  workflow_dispatch:
+  push:
+    tags: ['v*']
 permissions:
   contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  SIGN_KEY: 414018C0BBB8C0A70A80BF570AA32CCB2C0B3951
 jobs:
   linux:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    environment: release
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
-      - name: Require a version tag
-        run: test "$(git describe --tags --exact-match HEAD)" = "v$(sed -n 's/^version = "\([^" ]*\)"/\1/p' Cargo.toml | head -1)"
+      - name: Match tag to app version and release notes
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(sed -n 's/^version = "\([^" ]*\)"/\1/p' Cargo.toml | head -1)
+          test "$TAG" = "v$version"
+          test -f "docs/RELEASE-v$version.md"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
       - name: Install Rust checks
         run: rustup component add rustfmt clippy
-      - name: Build tagged source and binary archives
-        run: bash scripts/release.sh
-      - name: Upload unsigned archives for local manifest signing
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: linux-release-candidate
-          path: target/distribution/*
-          if-no-files-found: error
-          retention-days: 7
+      - name: Restore signing key
+        env:
+          GPG_KEY_BASE64: ${{ secrets.RELEASE_GPG_KEY_BASE64 }}
+          GPG_PASSPHRASE: ${{ secrets.RELEASE_GPG_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          : "${GPG_KEY_BASE64:?Missing RELEASE_GPG_KEY_BASE64}"
+          umask 077
+          export GNUPGHOME="$RUNNER_TEMP/gnupg"
+          mkdir -p "$GNUPGHOME"
+          printf '%s' "$GPG_KEY_BASE64" | base64 --decode | gpg --batch --quiet --import
+          printf 'batch\npinentry-mode loopback\n' > "$GNUPGHOME/gpg.conf"
+          if [ -n "$GPG_PASSPHRASE" ]; then
+            printf '%s' "$GPG_PASSPHRASE" > "$GNUPGHOME/passphrase"
+            echo "passphrase-file $GNUPGHOME/passphrase" >> "$GNUPGHOME/gpg.conf"
+          fi
+          gpg --list-secret-keys "$SIGN_KEY" > /dev/null
+          echo "GNUPGHOME=$GNUPGHOME" >> "$GITHUB_ENV"
+      - name: Check, build, sign and verify
+        run: bash scripts/release.sh --sign-key "$SIGN_KEY"
+      - name: Remove signing key
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/gnupg"
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          flags=()
+          case "$VERSION" in 0.*|*-*) flags+=(--prerelease) ;; esac
+          gh release create "$TAG" --verify-tag "${flags[@]}" \
+            --title "Wave VPN $VERSION for Linux" \
+            --notes-file "docs/RELEASE-v$VERSION.md" \
+            target/distribution/*

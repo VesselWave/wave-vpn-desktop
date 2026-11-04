@@ -37,7 +37,9 @@ The script uses a throwaway keyring, checks the fingerprint, verifies the checks
 
 ## Cutting a candidate (maintainers)
 
-From a clean, tagged Linux checkout:
+Normally CI does this. Set `version` in `Cargo.toml`, add `docs/RELEASE-v<VERSION>.md`, commit, and push the tag `v<VERSION>`. The [release workflow](../.github/workflows/release-build.yml) runs `scripts/release.sh --sign-key` and publishes the GitHub release, using the release notes file as its text. Versions below 1.0 are marked as prereleases. The signing key and its passphrase are stored as the `RELEASE_GPG_KEY_BASE64` and `RELEASE_GPG_PASSPHRASE` secrets in the repository's `release` environment, which only `v*` tags can use.
+
+To build one by hand, from a clean, tagged Linux checkout:
 
 ```sh
 bash scripts/release.sh                                # unsigned candidate

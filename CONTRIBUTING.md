@@ -59,4 +59,4 @@ The keyring and Eddie tests use synthetic credentials and touch only their own p
 - Never commit credentials, private profiles, signing keys, local paths or build outputs.
 - The project is GPL-3.0-or-later; keep dependency notices intact.
 
-Releases are cut with `scripts/release.sh`; the gates are in [docs/RELEASE-GATES.md](docs/RELEASE-GATES.md).
+Releases are built, signed and published by CI when a `v*` tag is pushed; the steps and gates are in [docs/RELEASE-GATES.md](docs/RELEASE-GATES.md).
