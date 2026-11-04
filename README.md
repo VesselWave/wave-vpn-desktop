@@ -10,7 +10,7 @@
 
 An unofficial WireGuard client for [AirVPN](https://airvpn.org) on the Linux desktop. Sign in with your AirVPN account, pick a server and connect, with a Network Lock firewall that keeps traffic inside the tunnel. Open source, written in Rust, with signed releases.
 
-**[Download from vpn.vwave.me](https://vpn.vwave.me)** · [Release notes](docs/RELEASE-v0.1.1.md) · [Android app](https://github.com/VesselWave/wave-vpn-mobile)
+**[Download from vpn.vwave.me](https://vpn.vwave.me)** · [Release notes](docs/RELEASE-v0.1.1.md) · [Android app](https://github.com/VesselWave/wave-vpn-mobile) · [Forum thread](https://airvpn.org/forums/topic/82017-wave-vpn-open-source-wireguard-client-for-android-and-linux-unofficial-v011/)
 
 <p align="center">
   <img src="docs/screenshots/overview.png" alt="Overview: connected to Amsterdam, with IPv4, IPv6 and DNS verified, live rates and session totals" width="49%">

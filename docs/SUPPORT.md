@@ -40,6 +40,8 @@ Upgrading, uninstalling and the terminal commands are in the [user guide](USER-G
 
 ## Reporting a problem
 
+Open bugs as [GitHub issues](https://github.com/VesselWave/wave-vpn-desktop/issues). Ask questions in the [AirVPN forum thread](https://airvpn.org/forums/topic/82017-wave-vpn-open-source-wireguard-client-for-android-and-linux-unofficial-v011/).
+
 Security issues go privately to **vesselwave@protonmail.com** ([SECURITY.md](../SECURITY.md)).
 
 For everything else, attach a support report: **Logs → Support report** in the app, or from a terminal:
