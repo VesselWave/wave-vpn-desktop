@@ -177,7 +177,7 @@ pub fn shell(app: &Wave) -> Element<'_, Message> {
                             .into()
                         ),
                         border: iced::Border {
-                            radius: 99.into(),
+                            radius: theme::RADIUS_PILL.into(),
                             ..Default::default()
                         },
                         ..Default::default()
@@ -481,7 +481,7 @@ fn servers(app: &Wave) -> Element<'_, Message> {
         switches = switches.push(
             button(text(label).size(13))
                 .padding([5, 12])
-                .style(theme::selected(v == app.server_view))
+                .style(theme::segment(v == app.server_view))
                 .on_press(Message::ServerView(v)),
         );
     }
@@ -871,7 +871,7 @@ fn logs(app: &Wave) -> Element<'_, Message> {
     for level in [Level::Debug, Level::Info, Level::Warn, Level::Error] {
         filters = filters.push(
             button(text(level.label()).size(12))
-                .style(theme::selected(app.filters.contains(&(level as u8))))
+                .style(theme::segment(app.filters.contains(&(level as u8))))
                 .on_press(Message::Filter(level))
                 .padding([6, 12]),
         );

@@ -13,6 +13,12 @@ pub const SEMIBOLD: Font = Font {
 };
 pub const MONO: Font = Font::with_name("Geist Mono");
 pub const ACCENT: Color = Color::from_rgb8(47, 107, 255);
+// Shared VesselWave corner scale (same in the Android app, Wave Remote and both sites):
+// 8 rows/inputs/menus, 12 cards/panels, 16 sheets/dialogs/tiles, 24 site cards,
+// pill for buttons/chips/segments/badges, circle for round icon actions.
+pub const RADIUS_SM: f32 = 8.0;
+pub const RADIUS_MD: f32 = 12.0;
+pub const RADIUS_PILL: f32 = 999.0;
 #[derive(Clone, Copy)]
 pub struct Colors {
     pub bg: Color,
@@ -27,14 +33,14 @@ pub struct Colors {
 pub fn colors(t: &Theme) -> Colors {
     if t.extended_palette().is_dark {
         Colors {
-            bg: Color::from_rgb8(10, 10, 10),
-            sidebar: Color::from_rgb8(17, 17, 17),
-            surface: Color::from_rgb8(20, 20, 20),
-            border: Color::from_rgb8(38, 38, 38),
-            muted: Color::from_rgb8(161, 161, 161),
-            faint: Color::from_rgb8(107, 107, 107),
-            text: Color::from_rgb8(237, 237, 237),
-            hover: Color::from_rgb8(36, 36, 36),
+            bg: Color::from_rgb8(9, 11, 16),
+            sidebar: Color::from_rgb8(15, 17, 23),
+            surface: Color::from_rgb8(18, 21, 28),
+            border: Color::from_rgb8(37, 42, 53),
+            muted: Color::from_rgb8(159, 166, 181),
+            faint: Color::from_rgb8(106, 113, 130),
+            text: Color::from_rgb8(236, 238, 243),
+            hover: Color::from_rgb8(34, 39, 49),
         }
     } else {
         Colors {
@@ -107,7 +113,7 @@ pub fn panel(t: &Theme) -> container::Style {
         border: Border {
             color: c.border,
             width: 1.,
-            radius: 12.into(),
+            radius: RADIUS_MD.into(),
         },
         ..Default::default()
     }
@@ -128,7 +134,7 @@ pub fn chip(t: &Theme) -> container::Style {
     container::Style {
         background: Some(ACCENT.scale_alpha(0.12).into()),
         border: Border {
-            radius: 999.into(),
+            radius: RADIUS_PILL.into(),
             ..Default::default()
         },
         text_color: Some(color(t, Ink::Accent)),
@@ -144,7 +150,7 @@ pub fn status_chip(active: bool) -> impl Fn(&Theme) -> container::Style {
             border: Border {
                 color: colors(t).border,
                 width: 1.,
-                radius: 999.into(),
+                radius: RADIUS_PILL.into(),
             },
             text_color: Some(colors(t).muted),
             ..Default::default()
@@ -162,7 +168,7 @@ pub fn server_row(active: bool) -> impl Fn(&Theme, button::Status) -> button::St
                 Color::TRANSPARENT
             },
             width: 1.,
-            radius: 8.into(),
+            radius: RADIUS_SM.into(),
         };
         if active {
             style.background = Some(ACCENT.scale_alpha(0.12).into());
@@ -174,7 +180,7 @@ pub fn meter(role: Ink) -> impl Fn(&Theme) -> container::Style {
     move |t| container::Style {
         background: Some(color(t, role).into()),
         border: Border {
-            radius: 99.into(),
+            radius: RADIUS_PILL.into(),
             ..Default::default()
         },
         ..Default::default()
@@ -212,7 +218,7 @@ pub fn ghost(t: &Theme, status: button::Status) -> button::Style {
             .then_some(c.hover.into()),
         text_color: c.muted,
         border: Border {
-            radius: 8.into(),
+            radius: RADIUS_PILL.into(),
             ..Default::default()
         },
         ..Default::default()
@@ -240,12 +246,12 @@ pub fn picker(
     style.text_color = colors(t).text;
     style.border = Border {
         color: if t.extended_palette().is_dark {
-            Color::from_rgb8(62, 62, 62)
+            Color::from_rgb8(56, 62, 75)
         } else {
             Color::from_rgb8(200, 200, 200)
         },
         width: 1.,
-        radius: 8.into(),
+        radius: RADIUS_SM.into(),
     };
     style
 }
@@ -256,7 +262,7 @@ pub fn picker_menu(t: &Theme) -> iced::widget::overlay::menu::Style {
         border: Border {
             color: c.border,
             width: 1.,
-            radius: 8.into(),
+            radius: RADIUS_SM.into(),
         },
         text_color: c.text,
         selected_text_color: c.text,
@@ -264,9 +270,11 @@ pub fn picker_menu(t: &Theme) -> iced::widget::overlay::menu::Style {
         shadow: Shadow::default(),
     }
 }
+/// A navigation or list row that can be the current one.
 pub fn selected(active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |t, s| {
         let mut v = ghost(t, s);
+        v.border.radius = RADIUS_SM.into();
         if active {
             v.background = Some(colors(t).hover.into());
             v.text_color = colors(t).text;
@@ -274,9 +282,17 @@ pub fn selected(active: bool) -> impl Fn(&Theme, button::Status) -> button::Styl
         v
     }
 }
+/// One option inside a [`segments`] track, or a filter chip.
+pub fn segment(active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |t, s| {
+        let mut v = selected(active)(t, s);
+        v.border.radius = RADIUS_PILL.into();
+        v
+    }
+}
 pub fn primary(t: &Theme, status: button::Status) -> button::Style {
     let mut s = button::primary(t, status);
-    s.border.radius = 8.into();
+    s.border.radius = RADIUS_PILL.into();
     s.background = Some(Background::Color(
         if matches!(status, button::Status::Disabled) {
             ACCENT.scale_alpha(0.3)
@@ -316,7 +332,7 @@ pub fn power(active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
                 ACCENT.scale_alpha(0.35)
             },
             width: 1.,
-            radius: 999.into(),
+            radius: RADIUS_PILL.into(),
         },
         shadow: if active {
             Shadow {
@@ -340,7 +356,7 @@ pub fn input(t: &Theme, s: text_input::Status) -> text_input::Style {
             colors(t).border
         },
         width: 1.,
-        radius: 8.into(),
+        radius: RADIUS_SM.into(),
     };
     v
 }
@@ -358,23 +374,23 @@ pub fn toggle(t: &Theme, status: toggler::Status) -> toggler::Style {
         (true, true, true) => Color::from_rgb8(80, 140, 255),
         (true, true, false) => Color::from_rgb8(30, 80, 210),
         (true, false, _) => ACCENT,
-        (false, true, true) => Color::from_rgb8(96, 96, 96),
+        (false, true, true) => Color::from_rgb8(95, 102, 118),
         (false, true, false) => Color::from_rgb8(150, 150, 150),
-        (false, false, true) => Color::from_rgb8(58, 58, 58),
+        (false, false, true) => Color::from_rgb8(56, 62, 75),
         (false, false, false) => Color::from_rgb8(205, 205, 205),
     }
     .into();
     s.background_border_width = 0.;
     s.foreground_border_width = 0.;
     s.padding_ratio = 0.12;
-    s.border_radius = Some(999.into());
+    s.border_radius = Some(RADIUS_PILL.into());
     s
 }
 pub fn scroll(t: &Theme, status: scrollable::Status) -> scrollable::Style {
     let mut s = scrollable::default(t, status);
     s.vertical_rail.background = None;
     s.vertical_rail.scroller.background = colors(t).faint.scale_alpha(0.5).into();
-    s.vertical_rail.scroller.border.radius = 999.into();
+    s.vertical_rail.scroller.border.radius = RADIUS_PILL.into();
     s
 }
 pub fn segments(t: &Theme) -> container::Style {
@@ -383,7 +399,7 @@ pub fn segments(t: &Theme) -> container::Style {
         border: Border {
             color: colors(t).border,
             width: 1.,
-            radius: 8.into(),
+            radius: RADIUS_PILL.into(),
         },
         ..Default::default()
     }
