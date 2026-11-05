@@ -10,6 +10,7 @@ use iced::{
 };
 use icons::{icon, Icon};
 use theme::Ink;
+use wave_protocol::latency::Ping;
 fn line<'a>() -> Element<'a, Message> {
     container(Space::new())
         .width(Fill)
@@ -500,7 +501,7 @@ fn servers(app: &Wave) -> Element<'_, Message> {
         search,
         button(icon(Icon::Refresh, 16., Ink::Muted))
             .style(theme::ghost)
-            .on_press(Message::Refresh),
+            .on_press_maybe(app.manual_refresh_allowed().then_some(Message::Refresh)),
         text(format!("{count} servers"))
             .size(13)
             .style(theme::muted),
@@ -547,10 +548,10 @@ fn servers(app: &Wave) -> Element<'_, Message> {
             Sort::Load => a.load().total_cmp(&b.load()),
             Sort::Users => a.users.cmp(&b.users),
             Sort::Ping => app
-                .pings
+                .latency
                 .get(&a.name)
-                .unwrap_or(&u32::MAX)
-                .cmp(app.pings.get(&b.name).unwrap_or(&u32::MAX)),
+                .order()
+                .cmp(&app.latency.get(&b.name).order()),
             Sort::Score => app
                 .server_score(a)
                 .unwrap_or(u32::MAX)
@@ -770,22 +771,21 @@ fn servers(app: &Wave) -> Element<'_, Message> {
                 );
             }
             cells = cells.push(
-                text(
-                    app.pings
-                        .get(&s.name)
-                        .map(|n| format!("{n} ms"))
-                        .unwrap_or_else(|| "—".into()),
-                )
+                text(match app.latency.get(&s.name) {
+                    Ping::Measured(n) => format!("{n} ms"),
+                    Ping::Unreachable => "Timeout".into(),
+                    Ping::Unknown => "—".into(),
+                })
                 .width(64)
                 .font(theme::MONO)
                 .style(move |t: &Theme| iced::widget::text::Style {
                     color: Some(theme::color(
                         t,
-                        match app.pings.get(&s.name) {
-                            Some(n) if *n < 60 => Ink::Success,
-                            Some(n) if *n < 150 => Ink::Warning,
-                            Some(_) => Ink::Danger,
-                            None => Ink::Faint,
+                        match app.latency.get(&s.name) {
+                            Ping::Measured(n) if n < 60 => Ink::Success,
+                            Ping::Measured(n) if n < 150 => Ink::Warning,
+                            Ping::Measured(_) | Ping::Unreachable => Ink::Danger,
+                            Ping::Unknown => Ink::Faint,
                         },
                     )),
                 })

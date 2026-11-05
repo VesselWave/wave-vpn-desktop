@@ -55,5 +55,6 @@ The same fingerprint is on [keys.openpgp.org](https://keys.openpgp.org/search?q=
 ## Connection checks and support reports
 
 - Checks go over HTTPS, pinned to AirVPN's advertised exit addresses and bound to the matching tunnel address. Both the expected VPN identity and a random DNS receipt must match before a check counts as verified.
-- Checks repeat periodically, but they can't prove the absence of every leak timing or protocol. Missing provider data or a check-service failure is never shown as verified.
+- Checks run once per connection, right after the first handshake, and can't prove the absence of every leak timing or protocol. Missing provider data or a check-service failure is never shown as verified; an unavailable service leaves the connection up but unverified, while an observed mismatch stops it. The local routing table is rechecked every minute.
+- The latest manifest's sign-in addresses and RSA key are saved in the user's config directory after validation (HTTP(S) only, no credentials in URLs, at most 16 addresses, RSA ≥ 2048 bits). Anyone who can write that directory can already change the app's configuration and keyring; a damaged file falls back to the built-in set.
 - Support reports use an allowlisted format with fixed failure categories. Raw logs are never exported.

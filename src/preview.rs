@@ -42,7 +42,8 @@ pub fn setup(app: &mut Wave) {
             "192.0.2.2".parse().unwrap(),
             "192.0.2.3".parse().unwrap(),
         ];
-        app.pings.insert(s.name.clone(), ping);
+        app.latency
+            .insert(s.name.clone(), wave_protocol::latency::Ping::Measured(ping));
     }
     app.manifest = Some(m);
     app.log(Level::Info, "Preview data — no real VPN connection".into());

@@ -482,7 +482,7 @@ impl Options {
                         "mtu" => 576..=9000,
                         "keepalive" => 0..=65535,
                         "capacity_factor" => 0..=1000,
-                        "refresh" => 15..=86400,
+                        "refresh" => 300..=86400,
                         "penalty" => 0..=3600,
                         _ => 1..=3600,
                     };

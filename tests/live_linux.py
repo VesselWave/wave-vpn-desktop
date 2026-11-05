@@ -187,7 +187,9 @@ def main(binary, requests):
             protection()
             proc = None
             print('PASS real-tunnel worker SIGKILL and Recover retain protection', flush=True)
-        # Real negative checks: wrong system DNS and an unavailable provider endpoint.
+        # Real negative checks: wrong system DNS must stop the connection. An
+        # unavailable provider endpoint must not: it connects, shown unverified,
+        # so a check-service outage cannot disconnect and reconnect every client.
         for kind in ['wrong_dns', 'check_outage', 'partial_ipv6']:
             bad = json.loads(json.dumps(requests[1]))
             bad['options'].update({'verify_retries':'1', 'http_timeout':'2'})
@@ -199,24 +201,36 @@ def main(binary, requests):
                 bad['checks']['exits'] = ['192.0.2.54', '2001:db8::54']
             proc, events = worker(bad)
             last = None
+            accepted = False
             deadline = time.monotonic() + 45
             while time.monotonic() < deadline:
                 event = events.get(timeout=45)
-                assert event.get('event') != 'connected', 'Failed provider checks accepted as connected'
                 if event.get('event') == 'checks':
                     last = event['results']
+                if event.get('event') == 'connected':
+                    assert kind != 'wrong_dns', 'Failed DNS check accepted as connected'
+                    accepted = True
+                    break
                 if event.get('exited'):
                     break
-            assert proc.wait(timeout=10) != 0 and last is not None
+            assert last is not None
             if kind == 'wrong_dns':
+                assert proc.wait(timeout=10) != 0
                 assert last['dns'] == 'failed', 'Wrong system DNS was not detected'
-            elif kind == 'partial_ipv6':
-                assert last['ipv4'] == 'verified' and last['ipv6'] == 'unavailable', 'Partial IP-family failure was not distinguished'
+                protection()
+                print('PASS wrong_dns: refused Connected; Network Lock and blocked physical DNS retained', flush=True)
             else:
-                assert last['ipv4'] == 'unavailable', 'Provider outage was not distinguished'
-            protection()
+                assert accepted, 'Unavailable check service disconnected the tunnel'
+                if kind == 'partial_ipv6':
+                    assert last['ipv4'] == 'verified' and last['ipv6'] == 'unavailable', 'Partial IP-family failure was not distinguished'
+                else:
+                    assert last['ipv4'] == 'unavailable', 'Provider outage was not distinguished'
+                assert last['dns'] != 'verified', 'Unavailable checks reported as verified'
+                time.sleep(3)
+                assert proc.poll() is None, 'Worker stopped after an unavailable check'
+                disconnect(proc)
+                print('PASS ' + kind + ': connected unverified without disconnecting; Disconnect retained Network Lock', flush=True)
             proc = None
-            print('PASS ' + kind + ': refused Connected; Network Lock and blocked physical DNS retained', flush=True)
         capture.send_signal(signal.SIGINT)
         capture.wait(timeout=5)
         capture = None

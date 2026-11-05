@@ -693,121 +693,107 @@ fn publish_checks(results: &crate::checks::Results) {
         serde_json::json!({"event":"checks", "results":results})
     );
 }
-fn verify_tunnel(r: &Request, stop: &AtomicBool) -> Result<()> {
-    use crate::checks::{Outcome, Results};
-    let mut results = Results::default();
-    publish_checks(&results);
-    verify_routes(r)?;
-    if r.options.on("verify") {
-        publish_checks(&results);
-        return Ok(());
+/// Provider endpoints reached from a tunnel address, plus the system resolver.
+struct LiveProbe<'a> {
+    check: &'a crate::checks::ProviderCheck,
+    timeout: Duration,
+}
+impl crate::checks::Probe for LiveProbe<'_> {
+    fn tunnel(&mut self, local: std::net::IpAddr) -> Result<serde_json::Value> {
+        let client = self.check.client(local, self.timeout)?;
+        self.check.fetch(&client, "tun")
     }
-    let timeout = Duration::from_secs(r.options.number("http_timeout").min(5));
-    if let Some(check) = &r.checks {
-        check.validate()?;
-        for address in &r.profile.addresses {
-            if stop.load(Ordering::Relaxed) {
-                return Ok(());
-            }
-            let ip: std::net::IpAddr = address
-                .split('/')
-                .next()
-                .context("Tunnel address missing")?
-                .parse()?;
-            let outcome = if ip.is_ipv6() {
-                &mut results.ipv6
-            } else {
-                &mut results.ipv4
-            };
-            let client = match check.client(ip, timeout) {
-                Ok(client) => client,
-                Err(_) => {
-                    *outcome = Outcome::Unavailable;
-                    publish_checks(&results);
-                    bail!("Provider check unavailable for a configured IP family");
-                }
-            };
-            match check.fetch(&client, "tun") {
-                Ok(response) => {
-                    if crate::checks::verify_ip(&response, ip).is_err() {
-                        *outcome = Outcome::Failed;
-                        publish_checks(&results);
-                        bail!("VPN exit identity check failed");
-                    }
-                    *outcome = Outcome::Verified;
-                }
-                Err(_) => {
-                    *outcome = Outcome::Unavailable;
-                    publish_checks(&results);
-                    bail!("VPN internet/exit check unavailable");
-                }
-            }
-            publish_checks(&results);
-        }
-        if stop.load(Ordering::Relaxed) {
-            return Ok(());
-        }
-        let token = format!("{:032x}", rand::random::<u128>());
-        let host = check.dns_query.replace("{hash}", &token);
+    fn resolve(&mut self, host: &str) {
         // The system resolver must see the random challenge. An NXDOMAIN can
         // still be correct: the provider receipt, not getent's exit code, proves it.
-        let _ = crate::process::output(
-            Command::new(tool("getent")?)
-                .args(["ahosts", &host])
-                .env_clear()
-                .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin"),
-            None,
-            timeout,
-        );
-        if stop.load(Ordering::Relaxed) {
-            return Ok(());
+        if let Ok(getent) = tool("getent") {
+            let _ = crate::process::output(
+                Command::new(getent)
+                    .args(["ahosts", host])
+                    .env_clear()
+                    .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin"),
+                None,
+                self.timeout,
+            );
         }
-        let ip: std::net::IpAddr = r.profile.addresses[0].split('/').next().unwrap().parse()?;
-        let client = check.client(ip, timeout)?;
-        match check.fetch(&client, "dns") {
-            Ok(response) if crate::checks::verify_dns(&response, &token).is_ok() => {
-                results.dns = Outcome::Verified
-            }
-            Ok(_) => {
-                results.dns = Outcome::Failed;
-                publish_checks(&results);
-                bail!("System DNS verification failed; use Recover and retry");
-            }
-            Err(_) => {
-                results.dns = Outcome::Unavailable;
-                publish_checks(&results);
-                bail!("DNS check service unavailable");
-            }
-        }
-    } else {
-        // Generic/local peers have no provider challenge; never label DNS verified.
-        for address in &r.profile.addresses {
-            if stop.load(Ordering::Relaxed) {
-                return Ok(());
-            }
-            let ip: std::net::IpAddr = address
-                .split('/')
+    }
+    fn dns(&mut self, local: std::net::IpAddr) -> Result<serde_json::Value> {
+        let client = self.check.client(local, self.timeout)?;
+        self.check.fetch(&client, "dns")
+    }
+}
+fn tunnel_addresses(r: &Request) -> Result<Vec<std::net::IpAddr>> {
+    r.profile
+        .addresses
+        .iter()
+        .map(|a| {
+            a.split('/')
                 .next()
                 .context("Tunnel address missing")?
-                .parse()?;
-            reqwest::blocking::Client::builder()
-                .no_proxy()
-                .local_address(ip)
-                .timeout(timeout)
-                .build()?
-                .get("https://airvpn.org/")
-                .send()?
-                .error_for_status()?;
+                .parse()
+                .context("Invalid tunnel address")
+        })
+        .collect()
+}
+/// One verification pass. Runs only right after the first handshake.
+fn verify_tunnel(r: &Request, stop: &AtomicBool) -> Result<crate::checks::Verdict> {
+    use crate::checks::{Results, Verdict};
+    let mut results = Results::default();
+    publish_checks(&results);
+    if verify_routes(r).is_err() {
+        return Ok(Verdict::Failed("Public route does not use the tunnel"));
+    }
+    if r.options.on("verify") {
+        return Ok(Verdict::Skipped);
+    }
+    let timeout = Duration::from_secs(r.options.number("http_timeout").min(5));
+    let locals = tunnel_addresses(r)?;
+    let stopped = || stop.load(Ordering::Relaxed);
+    if let Some(check) = &r.checks {
+        let token = format!("{:032x}", rand::random::<u128>());
+        let mut probe = LiveProbe { check, timeout };
+        return Ok(crate::checks::verify_once(
+            check,
+            &locals,
+            &mut probe,
+            &token,
+            &mut results,
+            &mut publish_checks,
+            &stopped,
+        ));
+    }
+    // Generic/local peers have no provider challenge; never label DNS verified.
+    for ip in locals {
+        if stopped() {
+            return Ok(Verdict::Stopped);
+        }
+        let reached = reqwest::blocking::Client::builder()
+            .no_proxy()
+            .local_address(ip)
+            .timeout(timeout)
+            .build()?
+            .get("https://airvpn.org/")
+            .send()
+            .and_then(|r| r.error_for_status());
+        if reached.is_err() {
+            return Ok(Verdict::Unavailable);
         }
     }
     publish_checks(&results);
-    Ok(())
+    Ok(Verdict::Verified)
+}
+/// Sleep in short steps so Disconnect is not delayed by a verification pause.
+fn pause(duration: Duration, stop: &AtomicBool) {
+    let end = Instant::now() + duration;
+    while !stop.load(Ordering::Relaxed) && Instant::now() < end {
+        std::thread::sleep(Duration::from_millis(100).min(end - Instant::now()));
+    }
 }
 fn monitor(r: &mut Request, stop: &AtomicBool, changes: &mpsc::Receiver<bool>) -> Result<()> {
     let start = Instant::now();
     let mut connected = false;
     let mut stalled = false;
-    let mut checked = Instant::now();
+    let mut schedule = crate::checks::Schedule::default();
     let mut last_wall = std::time::SystemTime::now();
     let mut last_tick = Instant::now();
     // Generate traffic even when keepalive is disabled, to initiate the handshake.
@@ -852,41 +838,44 @@ fn monitor(r: &mut Request, stop: &AtomicBool, changes: &mpsc::Receiver<bool>) -
         {
             bail!("System resumed or networking paused; reconnect required");
         }
-        if connected && checked.elapsed() >= Duration::from_secs(60) {
-            println!(
-                "{}",
-                serde_json::json!({"event":"state","state":"checking"})
-            );
-            verify_tunnel(r, stop)?;
-            checked = Instant::now();
-            println!(
-                "{}",
-                serde_json::json!({"event":"state","state":"connected"})
-            );
-        }
         let s = stats()?;
-        if s.handshake > 0 && !connected {
-            let mut verified = false;
-            for _ in 0..r.options.number("verify_retries") {
+        match schedule.tick(start.elapsed(), s.handshake > 0) {
+            crate::checks::Due::Verify => {
+                use crate::checks::Verdict;
+                let verdict = crate::checks::verify_at_connect(
+                    r.options.number("verify_retries"),
+                    &mut || {
+                        verify_tunnel(r, stop).unwrap_or_else(|e| {
+                            eprintln!("Tunnel verification: {e}");
+                            Verdict::Failed("Tunnel verification failed")
+                        })
+                    },
+                    &mut |d| pause(d, stop),
+                    &|| stop.load(Ordering::Relaxed),
+                );
+                if verdict == Verdict::Stopped {
+                    return Ok(());
+                }
+                if let Verdict::Failed(reason) = verdict {
+                    debug_assert!(verdict.stops_connection());
+                    bail!("{reason}");
+                }
+                if verdict == Verdict::Unavailable {
+                    // A check-service outage is not a leak. Disconnecting here
+                    // would make every client reconnect at once.
+                    eprintln!(
+                        "Warning: AirVPN verification service unavailable; connection kept unverified"
+                    );
+                }
                 if stop.load(Ordering::Relaxed) {
                     return Ok(());
                 }
-                match verify_tunnel(r, stop) {
-                    Ok(()) => {
-                        verified = true;
-                        break;
-                    }
-                    Err(e) => eprintln!("Tunnel verification: {e}"),
-                };
-                std::thread::sleep(Duration::from_secs(1));
+                connected = true;
+                println!("{}", serde_json::json!({"event":"connected"}));
             }
-            ensure!(verified, "Tunnel verification failed");
-            if stop.load(Ordering::Relaxed) {
-                return Ok(());
-            }
-            connected = true;
-            checked = Instant::now();
-            println!("{}", serde_json::json!({"event":"connected"}));
+            // Local routing table only; provider checks never repeat.
+            crate::checks::Due::Routes => verify_routes(r)?,
+            crate::checks::Due::Idle => (),
         }
         if !connected {
             ensure!(

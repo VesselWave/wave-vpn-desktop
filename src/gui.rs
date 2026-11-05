@@ -14,12 +14,17 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     io::{BufRead, Write},
     process::{ChildStdin, Stdio},
-    sync::{mpsc, Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc, Arc, Mutex,
+    },
     time::{Duration, Instant},
 };
 use wave_protocol::{
+    latency::{self, LatencyCache},
     options::{Options, Section},
-    Account, Client, Manifest, Server, TunnelProfile,
+    schedule::{self, RefreshSchedule},
+    Account, BootstrapStore, Client, Manifest, Server, TunnelProfile,
 };
 use zeroize::Zeroize;
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -116,7 +121,8 @@ enum Event {
     Tray(tray::Action),
     TrayReady(Option<tray::Handle>),
     Login(u64, Box<Result<(Account, Manifest), String>>),
-    Refreshed(u64, Box<Result<(Account, Manifest), String>>),
+    /// Periodic refreshes fetch only the manifest; a manual one also the account.
+    Refreshed(u64, bool, Box<Result<(Option<Account>, Manifest), String>>),
     Imported(u64, Result<wave_protocol::eddie::Imported, String>),
     AccountSaved(u64, Result<(), String>),
     StorageLoaded(
@@ -125,7 +131,7 @@ enum Event {
         Result<Option<wave_protocol::credentials::Credentials>, String>,
     ),
     SignedOut(u64, Result<(), String>),
-    Pings(BTreeMap<String, u32>),
+    Pings(u64, latency::Outcome),
     Line(String),
     End(String),
     Notice(Result<String, String>),
@@ -186,7 +192,9 @@ struct Wave {
     lock_change: Option<bool>,
     session_password: String,
     busy: bool,
-    refreshing: bool,
+    refresh: RefreshSchedule,
+    /// Set on sign-out so in-flight sign-in/refresh requests stop failing over.
+    requests_cancel: Arc<AtomicBool>,
     account: Option<Account>,
     manifest: Option<Manifest>,
     tab: Tab,
@@ -197,7 +205,8 @@ struct Wave {
     search: String,
     prefs: Preferences,
     draft: Options,
-    pings: BTreeMap<String, u32>,
+    latency: LatencyCache,
+    latency_cancel: Arc<AtomicBool>,
     logs: Vec<Log>,
     filters: BTreeSet<u8>,
     status: String,
@@ -216,7 +225,6 @@ struct Wave {
     since: Option<Instant>,
     connections: u32,
     active_server: Option<Server>,
-    last_refresh: Instant,
     capture_tick: usize,
     preview: bool,
     persistent_lock: bool,
@@ -259,7 +267,8 @@ impl Wave {
             lock_change: None,
             session_password: String::new(),
             busy: false,
-            refreshing: false,
+            refresh: RefreshSchedule::new(Instant::now()),
+            requests_cancel: Arc::new(AtomicBool::new(false)),
             account: None,
             manifest: None,
             tab: Tab::Overview,
@@ -270,7 +279,8 @@ impl Wave {
             search: String::new(),
             prefs,
             draft,
-            pings: BTreeMap::new(),
+            latency: LatencyCache::default(),
+            latency_cancel: Arc::new(AtomicBool::new(false)),
             logs: vec![],
             filters: BTreeSet::from([1, 2, 3]),
             status: "Disconnected".into(),
@@ -289,7 +299,6 @@ impl Wave {
             since: None,
             connections: 0,
             active_server: None,
-            last_refresh: Instant::now(),
             capture_tick: 0,
             preview: std::env::var_os("WAVE_PREVIEW").is_some(),
             persistent_lock: false,
@@ -376,7 +385,7 @@ impl Wave {
     fn server_score(&self, server: &Server) -> Option<u32> {
         self.manifest.as_ref()?.desktop_score(
             server,
-            self.pings.get(&server.name).copied(),
+            self.latency.ranking(&server.name),
             self.prefs.options.number("capacity_factor"),
         )
     }
@@ -491,22 +500,25 @@ impl Wave {
                             };
                             return self.update(message);
                         }
-                        Event::Login(epoch, result) | Event::Refreshed(epoch, result) => {
+                        Event::Login(epoch, result) => {
                             if epoch != self.account_epoch {
                                 continue;
                             }
                             self.busy = false;
-                            self.refreshing = false;
-                            self.last_refresh = Instant::now();
                             match *result {
                                 Ok((a, m)) => {
                                     let first = self.account.is_none();
                                     if self.prefs.device.is_empty() {
                                         self.prefs.device = a.devices[0].name.clone();
                                     }
+                                    let interval = self.refresh_interval(Some(&m));
+                                    self.refresh.succeeded(
+                                        Instant::now(),
+                                        interval,
+                                        rand::random(),
+                                    );
                                     self.account = Some(a);
                                     self.manifest = Some(m);
-                                    self.last_refresh = Instant::now();
                                     self.error = None;
                                     self.log(
                                         Level::Info,
@@ -519,7 +531,6 @@ impl Wave {
                                         self.prefs.target =
                                             Target::Server(self.prefs.last_server.clone());
                                     }
-                                    self.measure();
                                     if first {
                                         self.save_account();
                                     }
@@ -538,6 +549,52 @@ impl Wave {
                                     if self.account.is_none() {
                                         self.session_password.zeroize();
                                     }
+                                }
+                            }
+                        }
+                        Event::Refreshed(epoch, manual, result) => {
+                            if epoch != self.account_epoch {
+                                continue;
+                            }
+                            match *result {
+                                Ok((account, m)) => {
+                                    let interval = self.refresh_interval(Some(&m));
+                                    self.refresh.succeeded(
+                                        Instant::now(),
+                                        interval,
+                                        rand::random(),
+                                    );
+                                    if let Some(a) = account {
+                                        self.account = Some(a);
+                                    }
+                                    self.manifest = Some(m);
+                                    if self
+                                        .error
+                                        .as_deref()
+                                        .is_some_and(|e| e.contains(KEEPING_SERVERS))
+                                    {
+                                        self.error = None;
+                                    }
+                                    self.log(Level::Info, "AirVPN server list updated".into());
+                                }
+                                Err(e) => {
+                                    // Keep the cached account and servers usable;
+                                    // retry later with growing, jittered delays.
+                                    let interval = self.refresh_interval(self.manifest.as_ref());
+                                    self.refresh
+                                        .failed(Instant::now(), interval, rand::random());
+                                    let wait = self
+                                        .refresh
+                                        .next()
+                                        .saturating_duration_since(Instant::now());
+                                    let message = format!(
+                                        "{e}. {KEEPING_SERVERS}; next attempt in about {} min.",
+                                        wait.as_secs().div_ceil(60)
+                                    );
+                                    if manual {
+                                        self.error = Some(message.clone());
+                                    }
+                                    self.log(Level::Warn, message);
                                 }
                             }
                         }
@@ -576,7 +633,9 @@ impl Wave {
                                 Ok(()) => {
                                     self.account_epoch = self.account_epoch.wrapping_add(1);
                                     self.busy = false;
-                                    self.refreshing = false;
+                                    self.requests_cancel.store(true, Ordering::Relaxed);
+                                    self.requests_cancel = Arc::new(AtomicBool::new(false));
+                                    self.refresh.reset(Instant::now());
                                     self.retry_at = None;
                                     self.retry_attempts = 0;
                                     self.status = "Disconnected".into();
@@ -587,7 +646,8 @@ impl Wave {
                                     self.login.zeroize();
                                     self.password.zeroize();
                                     self.session_password.zeroize();
-                                    self.pings.clear();
+                                    self.cancel_measurement();
+                                    self.latency.clear();
                                     self.log(Level::Info, "Signed out".into());
                                 }
                                 Err(error) => self.error = Some(error),
@@ -613,8 +673,15 @@ impl Wave {
                                 Err(e) => self.error = Some(e),
                             }
                         }
-                        Event::Pings(pings) => {
-                            self.pings = pings;
+                        Event::Pings(generation, outcome) => {
+                            let offline = outcome == latency::Outcome::Offline;
+                            if !self.latency.finish(generation, Instant::now(), outcome) && offline
+                            {
+                                self.log(
+                                    Level::Debug,
+                                    "No server answered the latency probe; retrying later".into(),
+                                );
+                            }
                         }
                         Event::Line(line) => self.transport_line(line),
                         Event::End(message) => {
@@ -640,7 +707,10 @@ impl Wave {
                             }
                             self.retry_at = retry.then(|| {
                                 Instant::now()
-                                    + wave_protocol::lifecycle::retry_delay(self.retry_attempts)
+                                    + wave_protocol::lifecycle::retry_delay_jittered(
+                                        self.retry_attempts,
+                                        rand::random(),
+                                    )
                             });
                             if retry {
                                 self.retry_attempts = self.retry_attempts.saturating_add(1);
@@ -671,7 +741,7 @@ impl Wave {
                             self.tx_rate = 0.;
                             if !message.is_empty() {
                                 let message =
-                                    self.checks.issue().map(str::to_owned).unwrap_or(message);
+                                    self.checks.failure().map(str::to_owned).unwrap_or(message);
                                 self.error = Some(message.clone());
                                 self.log(Level::Error, message);
                             } else {
@@ -732,11 +802,17 @@ impl Wave {
                     self.retry_at = None;
                     return self.update(Message::Connect);
                 }
+                let now = Instant::now();
+                // Do not race connection setup; refresh once the tunnel is up or idle.
+                let connecting = self.control.is_some() && self.since.is_none();
+                if self.account.is_some() && !connecting && self.refresh.due(now) {
+                    self.refresh(false);
+                }
                 if self.account.is_some()
-                    && !self.refreshing
-                    && self.last_refresh.elapsed().as_secs() >= self.prefs.options.number("refresh")
+                    && self.manifest.is_some()
+                    && self.latency.due(now, self.probes_blocked())
                 {
-                    self.refresh();
+                    self.measure();
                 }
             }
             Message::ImportPath(value) => self.import_path = value,
@@ -777,8 +853,10 @@ impl Wave {
                 let mut password = self.session_password.clone();
                 let tx = self.sender.clone();
                 let timeout = self.prefs.options.number("http_timeout");
+                let cancel = self.requests_cancel.clone();
                 std::thread::spawn(move || {
                     let r = Client::with_timeout(timeout)
+                        .map(|c| c.remembering(bootstrap_store()).cancellable(cancel))
                         .and_then(|c| c.login(&login, &password))
                         .map_err(|error| wave_protocol::sign_in_error(&error));
                     password.zeroize();
@@ -884,7 +962,16 @@ impl Wave {
                 }
                 Err(e) => self.error = Some(e.to_string()),
             },
-            Message::Refresh => self.refresh(),
+            Message::Refresh => {
+                if self.refresh.manual_allowed(Instant::now()) {
+                    self.refresh(true);
+                } else if !self.refresh.running() {
+                    self.log(
+                        Level::Info,
+                        "Server list was refreshed moments ago; try again in a minute".into(),
+                    );
+                }
+            }
             Message::Connect if self.network_busy && self.control.is_none() => return Task::none(),
             Message::Connect if self.control.is_some() && !self.preview => {
                 self.switching = true;
@@ -903,6 +990,8 @@ impl Wave {
                 }
                 match self.profile() {
                     Ok(profile) => {
+                        // Probes through or around a tunnel skew the ranking.
+                        self.cancel_measurement();
                         self.network_revision = self.network_revision.wrapping_add(1);
                         self.checks = Default::default();
                         self.retryable = false;
@@ -1033,44 +1122,46 @@ impl Wave {
         profile.apply_options(&self.prefs.options)?;
         Ok(profile)
     }
-    fn measure(&self) {
+    /// Probing is pointless while a tunnel or Network Lock is in the way.
+    fn probes_blocked(&self) -> bool {
+        self.control.is_some() || self.retry_at.is_some() || self.guarded
+    }
+    fn manual_refresh_allowed(&self) -> bool {
+        self.account.is_some() && self.refresh.manual_allowed(Instant::now())
+    }
+    fn refresh_interval(&self, manifest: Option<&Manifest>) -> Duration {
+        schedule::interval(
+            self.prefs.options.number("refresh"),
+            manifest.map(|m| m.refresh_minutes),
+        )
+    }
+    fn measure(&mut self) {
         if self.preview {
             return;
         }
-        let servers = self
-            .manifest
-            .as_ref()
-            .map(|m| m.servers.clone())
-            .unwrap_or_default();
+        let Some(manifest) = &self.manifest else {
+            return;
+        };
+        let targets = latency::targets(&manifest.servers);
+        let generation = self.latency.begin(Instant::now());
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.latency_cancel = cancel.clone();
         let tx = self.sender.clone();
-        let timeout = self.prefs.options.number("pinger_timeout");
+        let timeout = Duration::from_secs(self.prefs.options.number("pinger_timeout"));
         std::thread::spawn(move || {
-            let mut pings = BTreeMap::new();
-            for batch in servers.chunks(16) {
-                let measured: Vec<_> = std::thread::scope(|scope| {
-                    batch
-                        .iter()
-                        .map(|s| {
-                            scope.spawn(move || {
-                                let ip = s.entries.iter().find(|ip| ip.is_ipv4())?;
-                                let start = Instant::now();
-                                std::net::TcpStream::connect_timeout(
-                                    &std::net::SocketAddr::new(*ip, 443),
-                                    Duration::from_secs(timeout),
-                                )
-                                .ok()?;
-                                Some((s.name.clone(), start.elapsed().as_millis().max(1) as u32))
-                            })
-                        })
-                        .collect::<Vec<_>>()
-                        .into_iter()
-                        .filter_map(|h| h.join().ok().flatten())
-                        .collect()
-                });
-                pings.extend(measured);
-            }
-            let _ = tx.send(Event::Pings(pings));
+            let outcome = latency::measure(
+                &targets,
+                &latency::TcpProber,
+                timeout,
+                latency::PARALLEL,
+                &cancel,
+            );
+            let _ = tx.send(Event::Pings(generation, outcome));
         });
+    }
+    fn cancel_measurement(&mut self) {
+        self.latency_cancel.store(true, Ordering::Relaxed);
+        self.latency.cancel();
     }
     fn query_status(&mut self) {
         self.status_pending = true;
@@ -1100,22 +1191,36 @@ impl Wave {
             let _ = tx.send(Event::NetworkStatus(revision, result));
         });
     }
-    fn refresh(&mut self) {
-        if self.preview || self.refreshing || self.account.is_none() {
+    fn refresh(&mut self, manual: bool) {
+        if self.preview || self.refresh.running() || self.account.is_none() {
             return;
         }
         let epoch = self.account_epoch;
-        self.refreshing = true;
+        self.refresh.start(Instant::now());
         let login = self.login.clone();
         let mut password = self.session_password.clone();
         let tx = self.sender.clone();
         let timeout = self.prefs.options.number("http_timeout");
+        let cancel = self.requests_cancel.clone();
         std::thread::spawn(move || {
             let r = Client::with_timeout(timeout)
-                .and_then(|c| c.login(&login, &password))
-                .map_err(|_| "Unable to refresh AirVPN data".into());
+                .map(|c| c.remembering(bootstrap_store()).cancellable(cancel))
+                .and_then(|c| {
+                    if manual {
+                        c.login(&login, &password).map(|(a, m)| (Some(a), m))
+                    } else {
+                        c.manifest(&login, &password).map(|m| (None, m))
+                    }
+                })
+                .map_err(|e| {
+                    if e.is::<wave_protocol::AccountRejected>() {
+                        wave_protocol::sign_in_error(&e)
+                    } else {
+                        "Unable to refresh AirVPN data".into()
+                    }
+                });
             password.zeroize();
-            let _ = tx.send(Event::Refreshed(epoch, Box::new(r)));
+            let _ = tx.send(Event::Refreshed(epoch, manual, Box::new(r)));
         });
     }
     fn transport_line(&mut self, line: String) {
@@ -1299,6 +1404,10 @@ impl Drop for Wave {
         }
     }
 }
+const KEEPING_SERVERS: &str = "Keeping the current server list";
+fn bootstrap_store() -> BootstrapStore {
+    BootstrapStore::in_directory(&preferences::directory())
+}
 fn launch_transport(
     profile: TunnelProfile,
     options: Options,
@@ -1449,5 +1558,130 @@ mod safety_tests {
             .unwrap();
         let _ = app.update(Message::Tick);
         assert!(!app.protection_known && app.protection.enabled.is_none());
+    }
+    fn signed_in() -> Wave {
+        use base64::Engine;
+        let mut app = app();
+        let key = base64::engine::general_purpose::STANDARD.encode([7u8; 32]);
+        app.account = Some(
+            wave_protocol::parse_account(
+                &format!(
+                    r#"<user login="tester" wg_public_key="{key}"><keys><key name="laptop"
+                    wg_private_key="{key}" wg_preshared="{key}" wg_ipv4="10.1.2.3/32"
+                    wg_dns_ipv4="10.1.0.1"/></keys></user>"#
+                ),
+                "tester",
+            )
+            .unwrap(),
+        );
+        app.manifest = Some(
+            wave_protocol::parse_manifest(include_str!(
+                "../protocol-data/fixtures/eddie-manifest.xml"
+            ))
+            .unwrap(),
+        );
+        app
+    }
+    #[test]
+    fn failed_refresh_keeps_the_cached_account_and_servers_and_backs_off() {
+        let mut app = signed_in();
+        let servers = app.manifest.as_ref().unwrap().servers.len();
+        app.refresh.start(Instant::now());
+        app.sender
+            .send(Event::Refreshed(
+                app.account_epoch,
+                false,
+                Box::new(Err("Unable to refresh AirVPN data".into())),
+            ))
+            .unwrap();
+        let _ = app.update(Message::Tick);
+        assert!(app.account.is_some());
+        assert_eq!(app.manifest.as_ref().unwrap().servers.len(), servers);
+        assert!(app.error.is_none(), "a background failure is only logged");
+        assert_eq!(app.refresh.failures(), 1);
+        assert!(app.refresh.next() >= Instant::now() + Duration::from_secs(200));
+        assert!(!app.manual_refresh_allowed(), "manual retry waits a minute");
+        // A stale epoch (after sign-out/sign-in) cannot touch the new session.
+        app.sender
+            .send(Event::Refreshed(
+                app.account_epoch.wrapping_add(1),
+                true,
+                Box::new(Err("old".into())),
+            ))
+            .unwrap();
+        let _ = app.update(Message::Tick);
+        assert!(app.error.is_none() && app.refresh.failures() == 1);
+        app.refresh.start(Instant::now());
+        app.sender
+            .send(Event::Refreshed(
+                app.account_epoch,
+                true,
+                Box::new(Err("Unable to refresh AirVPN data".into())),
+            ))
+            .unwrap();
+        let _ = app.update(Message::Tick);
+        assert!(app.error.as_deref().is_some_and(|e| e.contains("Keeping")));
+    }
+    #[test]
+    fn latency_results_from_cancelled_runs_are_ignored_and_tunnels_block_probes() {
+        let mut app = signed_in();
+        assert!(!app.probes_blocked());
+        let old = app.latency.begin(Instant::now());
+        app.cancel_measurement();
+        let current = app.latency.begin(Instant::now());
+        for (generation, ms) in [(old, 1), (current, 42)] {
+            app.sender
+                .send(Event::Pings(
+                    generation,
+                    latency::Outcome::Complete(
+                        [("Achernar".into(), latency::Ping::Measured(ms))].into(),
+                    ),
+                ))
+                .unwrap();
+        }
+        let _ = app.update(Message::Tick);
+        assert_eq!(app.latency.get("Achernar"), latency::Ping::Measured(42));
+        app.control = Some(Arc::new(Mutex::new(WorkerControl::default())));
+        assert!(app.probes_blocked());
+        app.control = None;
+        app.retry_at = Some(Instant::now());
+        assert!(app.probes_blocked());
+        app.retry_at = None;
+        app.guarded = true;
+        assert!(app.probes_blocked(), "Network Lock blocks probes anyway");
+    }
+    #[test]
+    fn sign_out_cancels_in_flight_requests_and_clears_latency() {
+        let mut app = signed_in();
+        let in_flight = app.requests_cancel.clone();
+        app.latency
+            .insert("Achernar".into(), latency::Ping::Measured(9));
+        app.sender
+            .send(Event::SignedOut(app.account_epoch, Ok(())))
+            .unwrap();
+        let _ = app.update(Message::Tick);
+        assert!(in_flight.load(Ordering::Relaxed));
+        assert!(!app.requests_cancel.load(Ordering::Relaxed));
+        assert_eq!(app.latency.get("Achernar"), latency::Ping::Unknown);
+        assert!(app.account.is_none() && app.manifest.is_none());
+    }
+    #[test]
+    fn an_unavailable_check_is_not_blamed_for_a_later_disconnect() {
+        let mut app = app();
+        app.transport_line(
+            r#"{"event":"checks","results":{"ipv4":"verified","ipv6":"unknown","dns":"unavailable"}}"#
+                .into(),
+        );
+        app.retryable = true;
+        app.sender
+            .send(Event::End("WireGuard handshake expired".into()))
+            .unwrap();
+        let _ = app.update(Message::Tick);
+        assert_eq!(app.error.as_deref(), Some("WireGuard handshake expired"));
+        let wait = app
+            .retry_at
+            .unwrap()
+            .saturating_duration_since(Instant::now());
+        assert!(wait <= wave_protocol::lifecycle::retry_delay(0).mul_f64(1.2));
     }
 }

@@ -54,7 +54,8 @@ pub struct Mode {
 pub struct Manifest {
     pub servers: Vec<Server>,
     pub modes: Vec<Mode>,
-    pub bootstrap: Bootstrap,
+    /// The manifest's own bootstrap, present only when it validates.
+    pub bootstrap: Option<Bootstrap>,
     pub refresh_minutes: u32,
     pub factors: [f64; 3],
     pub check_domain: String,
@@ -79,11 +80,12 @@ impl Manifest {
     }
     /// Desktop ranking: Eddie's speed terms with Wave's presentation policy.
     /// Users have little weight; congestion above 60% receives a quadratic cost.
-    /// Missing ping contributes zero until a measurement arrives.
+    /// An unknown ping contributes zero; an unreachable server ranks after
+    /// every server that answered.
     pub fn desktop_score(
         &self,
         server: &Server,
-        ping: Option<u32>,
+        ping: crate::latency::Ping,
         capacity_factor: u64,
     ) -> Option<u32> {
         if !server.available() || !server.warning_open.is_empty() {
@@ -98,7 +100,7 @@ impl Manifest {
         let score = server.score_base / self.factors[0]
             + load * self.factors[1]
             + users * self.factors[2] / 1000.
-            + f64::from(ping.unwrap_or(0))
+            + f64::from(ping.cost())
             + (load - 60.).max(0.).powi(2)
             - capacity_factor as f64 * (server.capacity as f64 / 1000.);
         Some(score.max(0.) as u32)
@@ -172,12 +174,9 @@ pub fn parse_manifest(text: &str) -> Result<Manifest> {
         modulus: root.attribute("auth_rsa_modulus").unwrap_or("").into(),
         exponent: root.attribute("auth_rsa_exponent").unwrap_or("").into(),
     };
-    ensure!(
-        !bootstrap.urls.is_empty()
-            && !bootstrap.modulus.is_empty()
-            && !bootstrap.exponent.is_empty(),
-        "Missing bootstrap data"
-    );
+    // An unusable bootstrap must not discard a good server list; the client keeps
+    // the previous (or embedded) configuration instead.
+    let bootstrap = bootstrap.validate().is_ok().then_some(bootstrap);
     let factors = ["speed_factor", "load_factor", "users_factor"].map(|name| {
         root.attribute(name)
             .and_then(|s| s.parse::<f64>().ok())

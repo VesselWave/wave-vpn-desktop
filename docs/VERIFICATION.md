@@ -24,6 +24,7 @@ What has been tested on Wave VPN for Linux, what failed, and what's still open. 
 
 ## Log, newest first
 
+- [Infrastructure load fixes — 2026-11-05](#infrastructure-load-fixes--2026-11-05)
 - [Parent review — 2026-10-23 UTC](#parent-review--2026-10-23-utc)
 - [Round 4 release verification — 2026-10-23 UTC](#round-4-release-verification--2026-10-23-utc)
 - [Round 3 evidence audit — 2026-10-22](#round-3-evidence-audit--2026-10-22)
@@ -35,6 +36,42 @@ What has been tested on Wave VPN for Linux, what failed, and what's still open. 
 - [Focused desktop verification — 2026-10-21](#focused-desktop-verification--2026-10-21)
 - [Desktop parity update — 2026-10-21](#desktop-parity-update--2026-10-21)
 - [Initial verification](#initial-verification)
+
+## Infrastructure load fixes — 2026-11-05
+
+Changes from AirVPN staff feedback (see [provenance](PROVENANCE.md#infrastructure-load-review--2026-11-05)),
+covered by deterministic tests with fake transports, probes and clocks; nothing
+contacts AirVPN:
+
+- `tests/verification.rs`: provider checks run exactly once in a simulated
+  24-hour session; a 10-minute check-service outage across 1000 simulated
+  clients causes no requests from connected clients and no disconnects; an
+  observed identity or DNS mismatch still stops the connection; connect-time
+  retries are capped at three passes, 1 s then 2 s apart; refresh floor,
+  manifest hint, manual rate limit and failure backoff over a six-hour outage;
+  reconnect delay jitter.
+- `tests/latency.rs`: at most four probes in flight for 250 servers, one probe
+  per server, unreachable never 0 ms, all-fail treated as offline, cancellation,
+  30-minute cache, no probes with a tunnel active, and at most 24 runs in a day
+  of 15-second refreshes.
+- `tests/bootstrap.rs`: a fake encrypted endpoint with test RSA keys covers
+  first-run use of the embedded set, use and persistence of the latest manifest
+  bootstrap including key rotation, invalid manifest data keeping the previous
+  set and the server list, fallback to the embedded set, bounded failover
+  pauses, account refusal stopping failover, manifest-only refresh,
+  cancellation, and a store that ignores damaged or symlinked files.
+- `tests/desktop_scoring.rs` and GUI unit tests: unreachable servers rank last;
+  failed refreshes keep the cached account and servers; stale latency results
+  are ignored; sign-out cancels in-flight requests; an unavailable check is not
+  blamed for a later disconnect.
+
+`tests/live_linux.py` now expects the new contract: wrong system DNS still
+refuses Connected; an unreachable check endpoint (outage or one IP family)
+connects unverified and stays up until Disconnect.
+
+Host (macOS) all-target tests and strict Clippy pass, and strict Clippy passes
+for `aarch64-unknown-linux-gnu`. Not yet run: the isolated Linux network suite,
+the authenticated live suite, or GUI behavior in a VM.
 
 ## Initial verification
 

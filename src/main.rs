@@ -94,7 +94,9 @@ fn main() -> Result<()> {
                 _ => unreachable!(),
             };
             let mut password = rpassword::prompt_password("AirVPN password: ")?;
-            let response = Client::new()?.login(login, &password);
+            let response = Client::new()?
+                .remembering(BootstrapStore::in_directory(&config_directory()))
+                .login(login, &password);
             password.zeroize();
             let (account, manifest) = response?;
             match action {

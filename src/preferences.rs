@@ -21,13 +21,7 @@ pub struct Preferences {
     pub last_server: String,
 }
 pub fn directory() -> PathBuf {
-    std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .filter(|p| p.is_absolute())
-        .unwrap_or_else(|| {
-            PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config")
-        })
-        .join("wave-vpn")
+    wave_protocol::config_directory()
 }
 impl Preferences {
     pub fn load() -> Self {

@@ -45,7 +45,9 @@ implementation based on the pinned Eddie `Lib.Core/ConnectionInfo.cs` speed
 terms. Wave's desktop policy reduces the user-count term by 1000 and adds a
 quadratic congestion cost above 60% load, matching the intended old app policy
 illustrated by the supplied screenshots. Measured TCP latency contributes to the
-score; unmeasured latency contributes zero until available. Retry penalties
+score; a server that did not answer ranks after every server that did, and an
+unmeasured server ranks at the median measured latency (zero when nothing has
+been measured). Retry penalties
 remain a separate selection safeguard. This policy is not exact Eddie parity.
 The archived scoring code was inspected to identify behavioral differences; no
 backend code or tests were copied. Desktop implementation and synthetic tests
@@ -156,3 +158,18 @@ These support possible causes, not a diagnosis of the user's prior incident.
 Actual firewall queries, bounded retry, diagnostics, release verification and
 new regression tooling are newly authored. Archived backend/tests/packaging
 remain excluded.
+
+## Infrastructure load review — 2026-11-05
+
+AirVPN staff reviewed v0.1.1 at commit `ce9a15fd`
+([forum comment 268064](https://airvpn.org/forums/topic/82017-wave-vpn-open-source-wireguard-client-for-android-and-linux-unofficial-v011/?do=findComment&comment=268064))
+and asked for: provider checks only at connection time (as Eddie does) without
+disconnecting on a check-service failure; lighter, cached, less parallel latency
+probes with none while connected, and unreachable servers not counted as 0 ms;
+and the bootstrap URLs and RSA key from the latest manifest, with the embedded
+definition only as a first-run fallback and growing delays between failover
+attempts. These are requirements, not code. `src/bootstrap.rs`,
+`src/client.rs`, `src/latency.rs`, `src/schedule.rs`, the check policy in
+`src/checks.rs` and their synthetic tests were newly written. The manifest
+`urls`, `auth_rsa_modulus`, `auth_rsa_exponent` and `next_update` attributes are
+the same pinned Eddie schema already referenced above. No upstream code copied.

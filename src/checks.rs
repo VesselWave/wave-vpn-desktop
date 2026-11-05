@@ -43,17 +43,28 @@ pub struct Results {
     pub dns: Outcome,
 }
 impl Results {
+    /// Only checks that stop a connection. An unavailable check service never
+    /// does, so it must not be blamed for an unrelated disconnect.
+    pub fn failure(&self) -> Option<&'static str> {
+        if self.dns == Outcome::Failed {
+            Some("DNS verification failed. Use Recover and retry.")
+        } else if self.ipv4 == Outcome::Failed || self.ipv6 == Outcome::Failed {
+            Some("VPN tunnel identity did not match. Connection stopped.")
+        } else {
+            None
+        }
+    }
     pub fn issue(&self) -> Option<&'static str> {
         if self.dns == Outcome::Failed {
             Some("DNS verification failed. Use Recover and retry.")
         } else if self.dns == Outcome::Unavailable {
-            Some("AirVPN DNS verification is unavailable. Retry when the service or connection recovers.")
+            Some("AirVPN DNS verification is unavailable; the connection is not verified.")
         } else if self.ipv4 == Outcome::Failed || self.ipv6 == Outcome::Failed {
             Some("VPN tunnel identity did not match. Connection stopped.")
         } else if self.ipv4 == Outcome::Unavailable {
-            Some("AirVPN IPv4 verification is unavailable.")
+            Some("AirVPN IPv4 verification is unavailable; the connection is not verified.")
         } else if self.ipv6 == Outcome::Unavailable {
-            Some("AirVPN IPv6 verification is unavailable.")
+            Some("AirVPN IPv6 verification is unavailable; the connection is not verified.")
         } else {
             None
         }
@@ -142,4 +153,169 @@ pub fn verify_dns(response: &serde_json::Value, token: &str) -> Result<()> {
         "Provider did not observe the system DNS challenge"
     );
     Ok(())
+}
+
+/// The network side of a check. Linux uses the provider endpoints through the
+/// tunnel; tests use a fake. Nothing here decides whether to disconnect.
+pub trait Probe {
+    /// `/check/tun/` from the tunnel address `local`.
+    fn tunnel(&mut self, local: IpAddr) -> Result<serde_json::Value>;
+    /// Resolve `host` through the system resolver. The result is irrelevant:
+    /// the provider's receipt proves which resolver asked.
+    fn resolve(&mut self, host: &str);
+    /// `/check/dns/` from the tunnel address `local`.
+    fn dns(&mut self, local: IpAddr) -> Result<serde_json::Value>;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Verdict {
+    Verified,
+    /// Verification turned off by the user.
+    Skipped,
+    /// The check service did not answer. Not evidence of a leak; the
+    /// connection stays up and is shown as unverified.
+    Unavailable,
+    /// The provider saw another identity or resolver: stop the connection.
+    Failed(&'static str),
+    Stopped,
+}
+impl Verdict {
+    /// Only a provider-observed mismatch ends the session. A check-service
+    /// outage must not disconnect (and later reconnect) every client at once.
+    pub fn stops_connection(self) -> bool {
+        matches!(self, Self::Failed(_))
+    }
+}
+
+/// One pass over the provider checks, stopping at the first non-verified step
+/// so an unavailable service receives no further requests.
+pub fn verify_once(
+    check: &ProviderCheck,
+    locals: &[IpAddr],
+    probe: &mut dyn Probe,
+    token: &str,
+    results: &mut Results,
+    publish: &mut dyn FnMut(&Results),
+    stop: &dyn Fn() -> bool,
+) -> Verdict {
+    if check.validate().is_err() || locals.is_empty() {
+        return Verdict::Unavailable;
+    }
+    for local in locals {
+        if stop() {
+            return Verdict::Stopped;
+        }
+        let outcome = if local.is_ipv6() {
+            &mut results.ipv6
+        } else {
+            &mut results.ipv4
+        };
+        match probe.tunnel(*local) {
+            Ok(response) if verify_ip(&response, *local).is_ok() => *outcome = Outcome::Verified,
+            Ok(_) => {
+                *outcome = Outcome::Failed;
+                publish(results);
+                return Verdict::Failed("VPN exit identity check failed");
+            }
+            Err(_) => {
+                *outcome = Outcome::Unavailable;
+                publish(results);
+                return Verdict::Unavailable;
+            }
+        }
+        publish(results);
+    }
+    if stop() {
+        return Verdict::Stopped;
+    }
+    probe.resolve(&check.dns_query.replace("{hash}", token));
+    if stop() {
+        return Verdict::Stopped;
+    }
+    match probe.dns(locals[0]) {
+        Ok(response) if verify_dns(&response, token).is_ok() => results.dns = Outcome::Verified,
+        Ok(_) => {
+            results.dns = Outcome::Failed;
+            publish(results);
+            return Verdict::Failed("System DNS verification failed; use Recover and retry");
+        }
+        Err(_) => {
+            results.dns = Outcome::Unavailable;
+            publish(results);
+            return Verdict::Unavailable;
+        }
+    }
+    publish(results);
+    Verdict::Verified
+}
+
+/// Most passes made right after the first handshake, whatever the option says.
+pub const MAX_ATTEMPTS: u32 = 3;
+/// Pause before pass `attempt` (1-based retries): 1 s, 2 s, 4 s at most.
+pub fn retry_pause(attempt: u32) -> Duration {
+    Duration::from_secs(1u64 << attempt.saturating_sub(1).min(2))
+}
+
+/// Verification happens once per connection, like Eddie: a few spaced passes
+/// right after the first handshake, then never again for that session.
+pub fn verify_at_connect(
+    attempts: u64,
+    once: &mut dyn FnMut() -> Verdict,
+    pause: &mut dyn FnMut(Duration),
+    stop: &dyn Fn() -> bool,
+) -> Verdict {
+    let attempts = attempts.clamp(1, u64::from(MAX_ATTEMPTS)) as u32;
+    let mut last = Verdict::Unavailable;
+    for attempt in 0..attempts {
+        if attempt > 0 {
+            pause(retry_pause(attempt));
+        }
+        if stop() {
+            return Verdict::Stopped;
+        }
+        last = once();
+        if matches!(
+            last,
+            Verdict::Verified | Verdict::Skipped | Verdict::Stopped
+        ) {
+            return last;
+        }
+    }
+    last
+}
+
+/// What the connection monitor should do on a tick.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Due {
+    Idle,
+    /// Provider checks (network requests). Happens once per session.
+    Verify,
+    /// Local routing table check only; no network traffic.
+    Routes,
+}
+/// Local route checks repeat; provider checks never do.
+pub const ROUTE_INTERVAL: Duration = Duration::from_secs(60);
+
+#[derive(Debug, Default)]
+pub struct Schedule {
+    verified_at: Option<Duration>,
+    routes_at: Duration,
+}
+impl Schedule {
+    /// `elapsed` is time since the worker started; `handshake` whether one happened.
+    pub fn tick(&mut self, elapsed: Duration, handshake: bool) -> Due {
+        match self.verified_at {
+            None if handshake => {
+                self.verified_at = Some(elapsed);
+                self.routes_at = elapsed;
+                Due::Verify
+            }
+            None => Due::Idle,
+            Some(_) if elapsed.saturating_sub(self.routes_at) >= ROUTE_INTERVAL => {
+                self.routes_at = elapsed;
+                Due::Routes
+            }
+            Some(_) => Due::Idle,
+        }
+    }
 }

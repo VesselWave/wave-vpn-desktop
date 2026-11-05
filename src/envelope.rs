@@ -6,7 +6,7 @@ use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvI
 use anyhow::{anyhow, ensure, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use rand::{rngs::OsRng, RngCore};
-use rsa::{BigUint, Pkcs1v15Encrypt, RsaPublicKey};
+use rsa::{Pkcs1v15Encrypt, RsaPublicKey};
 use std::collections::BTreeMap;
 use zeroize::Zeroize;
 
@@ -33,10 +33,7 @@ impl Envelope {
         let mut iv = [0u8; 16];
         OsRng.fill_bytes(&mut key);
         OsRng.fill_bytes(&mut iv);
-        let rsa = RsaPublicKey::new(
-            BigUint::from_bytes_be(&STANDARD.decode(&bootstrap.modulus)?),
-            BigUint::from_bytes_be(&STANDARD.decode(&bootstrap.exponent)?),
-        )?;
+        let rsa = bootstrap.public_key()?;
         Ok(Self {
             key,
             iv,

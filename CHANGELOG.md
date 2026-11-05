@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+Lighter on AirVPN's infrastructure, following AirVPN staff feedback.
+
+**Changed**
+
+- Tunnel and DNS checks run once per connection instead of every 60 seconds; an unavailable check service leaves the connection up and unverified instead of disconnecting
+- Latency probes: at most four at a time, cached for 30 minutes, never while connecting, connected or under Network Lock; unreachable servers rank last instead of counting as 0 ms
+- Sign-in uses the bootstrap addresses and RSA key from the latest server list, saved locally, with the built-in set as a fallback; failover pauses grow between addresses
+- Server list refresh: manifest only, every 30 minutes or AirVPN's advertised interval and never more often than every 5; manual refresh at most once a minute; failures back off up to an hour; reconnects are spread with random jitter
+
 ## 0.1.1 · 2026-11-03 · early release
 
 New look; interface only. [Release notes](docs/RELEASE-v0.1.1.md).

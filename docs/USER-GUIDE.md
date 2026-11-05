@@ -15,7 +15,13 @@ Pick **Best server** or any server in **Servers**, then connect. Once the tunnel
 - **IPv4 / IPv6**: traffic arrives from the AirVPN server you connected to, for each IP family you have
 - **DNS**: a fresh lookup through your system resolver reached AirVPN's DNS
 
-Results show in Overview and repeat periodically. A failed check stops the connection; auto-reconnect retries with backoff. If the check service itself is down, the result says *unavailable*, which isn't evidence of a leak.
+The checks run once, right after the tunnel comes up (with up to two spaced retries), and results show in Overview. A failed check (another identity or resolver seen) stops the connection; auto-reconnect retries with jittered backoff. If the check service itself is down, the result says *unavailable*: that isn't evidence of a leak, so the connection stays up and is shown as not verified. While connected, only the local routing table is rechecked; nothing is sent to AirVPN.
+
+## Server list and latency
+
+- The server list refreshes about every 30 minutes (or AirVPN's advertised interval, if longer), never more often than every 5 minutes. The periodic refresh fetches only the server list; **Refresh** in **Servers** also refreshes your account and is limited to once a minute. If a refresh fails, the current list stays usable and Wave retries after 5, 10, 20… minutes (at most an hour), with random spread.
+- Sign-in addresses and AirVPN's public key come from the latest server list and are saved in `~/.config/wave-vpn/bootstrap.json`; the set built into the app is used on first run and as a fallback. Addresses are tried one at a time with short, growing pauses. Network Lock still exempts only the built-in addresses, so if AirVPN moves its sign-in servers, sign in while connected or with the lock off.
+- Ping is a TCP connection to each server's first IPv4 entry address, at most four at a time. Results are reused for 30 minutes and never measured while connecting, connected, reconnecting or under Network Lock. A server that doesn't answer shows *Timeout* and ranks after every server that did; servers added since the last measurement rank at the median.
 
 DNS works with systemd-resolved, resolvconf, or a plain `/etc/resolv.conf` (backed up and restored).
 
