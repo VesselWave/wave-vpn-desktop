@@ -333,6 +333,28 @@ fn fix_no_probes_while_connecting_connected_or_changing_the_lock() {
     assert!(!app.latency.due(now, app.probes_blocked()), "connected");
 }
 
+// Measure synchronous cached-profile generation and refresh-result adoption.
+// These are real controller paths with offline account/manifest fixtures;
+// this does not measure an authenticated GUI click or tunnel setup time.
+#[test]
+fn recheck_cached_profile_and_refresh_result_keep_ui_turn_bounded() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = app(&dir);
+    let mut profile_max = Duration::ZERO;
+    let mut refresh_max = Duration::ZERO;
+    for _ in 0..20 {
+        let start = Instant::now();
+        app.profile().unwrap();
+        profile_max = profile_max.max(start.elapsed());
+        let start = Instant::now();
+        refreshed(&mut app, false, None);
+        refresh_max = refresh_max.max(start.elapsed());
+    }
+    eprintln!("cached profile max: {profile_max:?}; refresh result max: {refresh_max:?}");
+    assert!(profile_max < Duration::from_secs(1));
+    assert!(refresh_max < Duration::from_secs(1));
+}
+
 /// Deliver the outcome of the last privileged action, as the helper thread does.
 fn helper_done(app: &mut Wave, result: Result<(), &str>) {
     app.sender
