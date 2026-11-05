@@ -21,20 +21,31 @@ cargo build --release --locked --bins
 host=$(rustc -vV | sed -n 's/^host: //p')
 [[ "$host" == *-linux-* ]] || { echo 'Linux release artifacts must be built on Linux' >&2; exit 1; }
 out="$repo/target/distribution"
+rm -rf -- "$out"
 mkdir -p "$out"
 work=$(mktemp -d)
 trap 'rm -rf -- "$work"' EXIT
+# The tarball: README.txt, install.sh and LICENSE on top, the files to install below.
 name="wave-vpn-$version-$host"
-DESTDIR="$work/$name" bash scripts/install.sh install
-printf 'version=%s\nrevision=%s\ntarget=%s\n' "$version" "$revision" "$host" > "$work/$name/SOURCE.txt"
-rustc -vV > "$work/$name/TOOLCHAIN.txt"
-cargo tree --locked --prefix none > "$work/$name/DEPENDENCIES.txt"
+bundle="$work/$name"
+DESTDIR="$bundle/files" bash scripts/install.sh install
+info="$bundle/files/usr/local/share/doc/wave-vpn"
+printf 'version=%s\nrevision=%s\ntarget=%s\n' "$version" "$revision" "$host" > "$info/SOURCE.txt"
+rustc -vV > "$info/TOOLCHAIN.txt"
+cargo tree --locked --prefix none > "$info/DEPENDENCIES.txt"
+install -m 755 scripts/install.sh "$bundle/install.sh"
+install -m 644 LICENSE "$bundle/LICENSE"
+sed "s/@VERSION@/$version/g" packaging/README.txt > "$bundle/README.txt"
+chmod 644 "$bundle/README.txt"
 git -C "$repo" archive --format=tar.gz --prefix="wave-vpn-$version/" HEAD > "$out/wave-vpn-$version-source.tar.gz"
 # GNU tar provides stable metadata and ordering; compile reproducibility is a
 # separate release gate and is not asserted by this archive operation.
 SOURCE_DATE_EPOCH=$(git -C "$repo" show -s --format=%ct HEAD)
+export SOURCE_DATE_EPOCH
 tar --sort=name --mtime="@$SOURCE_DATE_EPOCH" --owner=0 --group=0 --numeric-owner -czf "$out/$name.tar.gz" -C "$work" "$name"
-(cd "$out" && sha256sum "$name.tar.gz" "wave-vpn-$version-source.tar.gz" > "$name-SHA256SUMS")
+bash scripts/package.sh "$out" "$repo/target/release" "$info"
+packages=("wave-vpn_$version-1_amd64.deb" "wave-vpn-$version-1.x86_64.rpm" "wave-vpn-$version-1-x86_64.pkg.tar.zst")
+(cd "$out" && sha256sum "${packages[@]}" "$name.tar.gz" "wave-vpn-$version-source.tar.gz" > "$name-SHA256SUMS")
 echo "Candidate artifacts: $out"
 if [[ -n "$signing_key" ]]; then
     [[ "$signing_key" =~ ^[A-Fa-f0-9]{40}$ || "$signing_key" =~ ^[A-Fa-f0-9]{64}$ ]] || { echo 'Use a full signing-key fingerprint' >&2; exit 1; }

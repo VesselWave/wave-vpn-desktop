@@ -24,6 +24,7 @@ What has been tested on Wave VPN for Linux, what failed, and what's still open. 
 
 ## Log, newest first
 
+- [0.1.2 packaging and installer — 2026-11-05](#012-packaging-and-installer--2026-11-05)
 - [Parent review — 2026-10-23 UTC](#parent-review--2026-10-23-utc)
 - [Round 4 release verification — 2026-10-23 UTC](#round-4-release-verification--2026-10-23-utc)
 - [Round 3 evidence audit — 2026-10-22](#round-3-evidence-audit--2026-10-22)
@@ -605,3 +606,58 @@ explicitly left false; its original serialized value was not captured, so exact
 app-preference byte restoration is not claimed. No app source changes or new
 source-failure conclusions. Private filtered report and capture hashes:
 `/tmp/wave-linux-final-gui/report.md` and `evidence-sha256.txt`.
+
+## 0.1.2 packaging and installer — 2026-11-05
+
+Scope: the new `.deb`, `.rpm` and Arch packages, the self-contained tarball and
+its `install.sh`, and package/uninstall teardown. Networking code is unchanged
+from 0.1.1. The artifacts below are a local unsigned candidate built by
+`scripts/release.sh` in an `ubuntu:24.04` container from a local `v0.1.2` tag;
+the CI release rebuilds them, so these hashes identify the tested candidate only.
+
+```text
+4af62cd12b584ac20f06d682084b082ac982f630cfb4c265281ebae468165762  wave-vpn_0.1.2-1_amd64.deb
+2855a5349b2c84e75c224ba0380127b2b532ea5d921063c1f1eddf9e3c2348b4  wave-vpn-0.1.2-1.x86_64.rpm
+76592279cbc815461193d31f4656787cbe2be1971662ab4e4e29ef4d0fde86b8  wave-vpn-0.1.2-1-x86_64.pkg.tar.zst
+18dfc557cdaf38e3878051ac507f69820d54dd2e1c35fa0aa9f292aba37bbd00  wave-vpn-0.1.2-x86_64-unknown-linux-gnu.tar.gz
+```
+
+**Ubuntu 24.04 GNOME Wayland VM (lab VM 113):**
+
+- Tarball `./install.sh` run as the desktop user over a pre-0.1.0 `/usr/local`
+  install: asked for sudo itself, replaced binaries, refreshed the helper copy,
+  kept the authorized UID, removed stale flat docs. Unprivileged
+  `service-client network-status` answered without a password.
+- With `wireguard-tools` and `nftables` removed, the installer named them and
+  installed them after "y"; declining `libsecret-tools` installed the app with a
+  warning. The first `apt-get` hit unattended-upgrades' dpkg lock, so the
+  installer now waits up to five minutes for it.
+- `sudo wave-vpn-uninstall` and `apt remove wave-vpn`, each with Network Lock
+  enabled through the helper (LAN allowed): firewall table, helper, units and
+  `/etc/wave-vpn` removed, internet reachable, `~/.config/wave-vpn` kept.
+- `apt install ./wave-vpn_0.1.2-1_amd64.deb` pulled in `wireguard-tools`; the
+  post-install hook authorized the sudo user's helper; `--reinstall` kept it.
+- `gtk-launch wave-vpn` found the desktop entry for both installs and the GUI
+  stayed running. QEMU could not capture the VirGL display, so no screenshot.
+
+**CachyOS physical laptop, niri Wayland:**
+
+- `pacman -U` installed with the hook authorizing the sudo user's helper;
+  reinstall (`post_upgrade`) kept it; `pacman -R` ran the teardown (Arch passes
+  the version, not "remove") and removed helper, units and `/etc/wave-vpn`.
+- Tarball install and `sudo wave-vpn-uninstall` on a clean system; the tarball
+  installer now refuses to run over an installed package.
+- The packaged GUI launched from its desktop entry, rendered, and reported
+  Wayland `app_id` `wave-vpn` (previously empty, so docks showed no app icon).
+- Network Lock was not enabled on this laptop to avoid cutting its connection;
+  lock teardown is the same binary and hook verified on Ubuntu above.
+
+**Fedora 45 and openSUSE Tumbleweed containers:** `dnf`/`zypper` resolved the
+`.rpm` dependencies (`(iproute or iproute2)`, `/usr/bin/secret-tool`) and `rpm -e`
+removed it. The first candidate depended on `(libsecret or libsecret-tools)`,
+which openSUSE satisfied with the library alone and no `secret-tool`; fixed. A
+rootless container can't run `nft`, which showed removal failing when Wave had
+set nothing up; teardown now runs only when Wave state exists.
+
+Not covered: GUI connect with these packages, a real Fedora or openSUSE desktop,
+upgrade between two signed package releases, and the final CI-built artifacts.

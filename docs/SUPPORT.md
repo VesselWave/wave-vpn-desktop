@@ -6,27 +6,30 @@
 
 | System | Evidence |
 | --- | --- |
-| Ubuntu 24.04 x86_64, GNOME Wayland | Networking and desktop checks; helper security; EFI boot with the boot lock |
+| Ubuntu 24.04 x86_64, GNOME Wayland | Networking and desktop checks; helper security; EFI boot with the boot lock; 0.1.2 `.deb` and tarball install, upgrade and removal |
 | Ubuntu 24.04 ARM64, GNOME X11 | Networking and desktop checks; authenticated live suite from the v0.1.0 source |
-| CachyOS x86_64, physical laptop, Wayland | Shipped binary: GUI rendering, staged install and uninstall, all 19 isolated network scenarios |
+| CachyOS x86_64, physical laptop, niri Wayland | Shipped binary: GUI rendering, staged install and uninstall, all 19 isolated network scenarios; 0.1.2 Arch package and tarball install and removal |
+| Fedora 45, openSUSE Tumbleweed (containers) | 0.1.2 `.rpm` dependency resolution, install and removal only; no desktop session or networking |
 | Debian ARM64 Xfce, Fedora ARM64 KDE | Isolated network suite only, not full GUI support |
 
-Other distributions and architectures may work but haven't been tested. The published binary is x86_64 only. macOS builds the UI without VPN connections. Windows, OpenVPN and AirVPN account-side port forwarding and DDNS aren't supported. Exact binaries and results: [verification](VERIFICATION.md).
+Other distributions and architectures may work but haven't been tested. Published binaries and packages are x86_64 only. macOS builds the UI without VPN connections. Windows, OpenVPN and AirVPN account-side port forwarding and DDNS aren't supported. Exact binaries and results: [verification](VERIFICATION.md).
 
 ## Requirements
 
-- Kernel WireGuard, `wireguard-tools`, `iproute2`, `nftables`, `getent` and systemd. On Ubuntu: `sudo apt install wireguard-tools iproute2 nftables libsecret-tools`.
-- `libsecret-tools` and an unlocked desktop keyring for saved accounts and Eddie keyring import.
+- Kernel WireGuard, `wireguard-tools`, `iproute2`, `nftables`, `getent` and systemd. The .deb, .rpm and Arch packages depend on these; the tarball installer offers to install missing ones with apt, dnf, pacman or zypper.
+- `secret-tool` (libsecret) and an unlocked desktop keyring for saved accounts and Eddie keyring import.
 - DNS through systemd-resolved, resolvconf or a plain `/etc/resolv.conf`; Wave VPN detects which.
-- `pkexec` with a graphical polkit agent, only if you skip the installer and run a bare binary.
+- `pkexec` with a graphical polkit agent, if the networking helper is set up from the app on the first Connect rather than by a `sudo` install.
 
 ## Installing
 
-Follow the [README](../README.md#install): verify the downloads, then run the installer from the source archive with `sudo`. Rust isn't needed for the prebuilt binary.
+Pick the package for your system in the [README](../README.md#install): `.deb` for Ubuntu and Debian, `.rpm` for Fedora and openSUSE, `.pkg.tar.zst` for Arch and CachyOS, or the tarball with `./install.sh` for anything else. Packages install to `/usr`, the tarball to `/usr/local`; use one or the other. Rust isn't needed.
 
-The installer sets up a root-owned, socket-activated networking helper and authorizes the desktop user who ran `sudo`. After that, connecting and Network Lock never ask for a password, including after reboot. The helper doesn't enable a boot lock or autoconnect and never stores credentials.
+Wave VPN then sets up a root-owned, socket-activated networking helper and authorizes your desktop user: during a `sudo` install from a terminal, or on your first Connect after a password prompt. After that, connecting and Network Lock never ask for a password, including after reboot. The helper doesn't enable a boot lock or autoconnect and never stores credentials.
 
-Upgrading, uninstalling and the terminal commands are in the [user guide](USER-GUIDE.md#upgrading-and-uninstalling). Keep the extracted source folder: it holds the uninstaller.
+Running `wave-vpn-gui` straight from the extracted tarball works for browsing, but connecting needs an installed copy: the helper only runs a root-owned binary.
+
+Upgrading and uninstalling are in the [user guide](USER-GUIDE.md#upgrading-and-uninstalling).
 
 ## Troubleshooting
 
