@@ -61,7 +61,7 @@ fn manifest_document_at(next: Option<&Bootstrap>, time: Option<u64>) -> String {
             b.exponent.clone(),
         ),
         None => (
-            r#"<url address="ftp://203.0.113.9"/>"#.into(),
+            r#"<url address="ftp://45.90.113.9"/>"#.into(),
             "abc".into(),
             "AQAB".into(),
         ),
@@ -195,35 +195,35 @@ fn embedded_definition_is_valid_and_only_a_fallback() {
     pinned.validate().unwrap();
     assert_eq!(candidates(None), vec![pinned.clone()]);
     assert_eq!(candidates(Some(pinned.clone())), vec![pinned.clone()]);
-    let latest = config(1, &["http://198.51.100.1"]);
+    let latest = config(1, &["http://45.90.100.1"]);
     assert_eq!(
         candidates(Some(latest.clone())),
         vec![latest, pinned.clone()]
     );
-    let mut broken = config(1, &["http://198.51.100.1"]);
+    let mut broken = config(1, &["http://45.90.100.1"]);
     broken.modulus = "abc".into();
     assert_eq!(candidates(Some(broken)), vec![pinned]);
 }
 
 #[test]
 fn validation_refuses_unsafe_or_weak_bootstrap_data() {
-    let good = config(1, &["http://198.51.100.1", "https://bootstrap.example"]);
+    let good = config(1, &["http://45.90.100.1", "https://bootstrap.example"]);
     good.validate().unwrap();
     let with = |urls: Vec<String>| Bootstrap {
         urls,
         ..good.clone()
     };
     assert!(with(vec![]).validate().is_err());
-    assert!(with(vec!["http://198.51.100.1".into(); MAX_URLS + 1])
+    assert!(with(vec!["http://45.90.100.1".into(); MAX_URLS + 1])
         .validate()
         .is_err());
     for url in [
-        "ftp://198.51.100.1",
+        "ftp://45.90.100.1",
         "file:///etc/passwd",
-        "http://user:pass@198.51.100.1",
-        "http://198.51.100.1/?redirect=x",
-        "http://198.51.100.1/#x",
-        "http://198.51.100.1/\n",
+        "http://user:pass@45.90.100.1",
+        "http://45.90.100.1/?redirect=x",
+        "http://45.90.100.1/#x",
+        "http://45.90.100.1/\n",
         "not a url",
     ] {
         assert!(with(vec![url.into()]).validate().is_err(), "{url}");
@@ -249,8 +249,8 @@ fn failover_order_is_latest_first_ipv6_last_without_repeats() {
     let latest = config(
         1,
         &[
-            "http://[2001:db8::1]",
-            "http://198.51.100.1",
+            "http://[2a01:4f8::1]",
+            "http://45.90.100.1",
             "http://shared",
         ],
     );
@@ -259,9 +259,9 @@ fn failover_order_is_latest_first_ipv6_last_without_repeats() {
     assert_eq!(
         order,
         vec![
-            (0, "http://198.51.100.1".to_owned()),
+            (0, "http://45.90.100.1".to_owned()),
             (0, "http://shared".to_owned()),
-            (0, "http://[2001:db8::1]".to_owned()),
+            (0, "http://[2a01:4f8::1]".to_owned()),
             (1, "http://192.0.2.1".to_owned()),
         ]
     );
@@ -309,14 +309,14 @@ fn first_run_uses_the_embedded_addresses_in_order_with_backoff() {
 #[test]
 fn latest_manifest_bootstrap_is_used_persisted_and_rotated() {
     let (_dir, store) = store();
-    let first = config(1, &["http://198.51.100.1", "http://198.51.100.2"]);
+    let first = config(1, &["http://45.90.100.1", "http://45.90.100.2"]);
     store.save(&first).unwrap();
     // The service rotates key and addresses; the manifest announces them.
-    let rotated = config(2, &["http://203.0.113.5"]);
+    let rotated = config(2, &["http://45.90.113.5"]);
     let mut fake = Fake::new(&[
-        ("http://198.51.100.1", Endpoint::Down),
-        ("http://198.51.100.2", Endpoint::Up(1)),
-        ("http://203.0.113.5", Endpoint::Up(2)),
+        ("http://45.90.100.1", Endpoint::Down),
+        ("http://45.90.100.2", Endpoint::Up(1)),
+        ("http://45.90.113.5", Endpoint::Up(2)),
     ]);
     fake.next_bootstrap = Some(rotated.clone());
     let fake = Arc::new(fake);
@@ -330,10 +330,10 @@ fn latest_manifest_bootstrap_is_used_persisted_and_rotated() {
     assert_eq!(
         fake.calls(),
         vec![
-            ("http://198.51.100.1".into(), "".into()),
-            ("http://198.51.100.2".into(), "user".into()),
-            ("http://198.51.100.1".into(), "".into()),
-            ("http://198.51.100.2".into(), "manifest".into()),
+            ("http://45.90.100.1".into(), "".into()),
+            ("http://45.90.100.2".into(), "user".into()),
+            ("http://45.90.100.1".into(), "".into()),
+            ("http://45.90.100.2".into(), "manifest".into()),
         ],
         "embedded addresses are not contacted while the latest ones work"
     );
@@ -353,7 +353,7 @@ fn latest_manifest_bootstrap_is_used_persisted_and_rotated() {
     next.manifest("tester", "secret").unwrap();
     assert_eq!(
         fake.calls().last(),
-        Some(&("http://203.0.113.5".into(), "manifest".into()))
+        Some(&("http://45.90.113.5".into(), "manifest".into()))
     );
 }
 fn client_with(fake: &Arc<Fake>, store: &BootstrapStore) -> Client<Arc<Fake>> {
@@ -365,9 +365,9 @@ fn client_with(fake: &Arc<Fake>, store: &BootstrapStore) -> Client<Arc<Fake>> {
 #[test]
 fn invalid_manifest_bootstrap_keeps_servers_and_previous_configuration() {
     let (_dir, store) = store();
-    let first = config(1, &["http://198.51.100.1"]);
+    let first = config(1, &["http://45.90.100.1"]);
     store.save(&first).unwrap();
-    let fake = Arc::new(Fake::new(&[("http://198.51.100.1", Endpoint::Up(1))]));
+    let fake = Arc::new(Fake::new(&[("http://45.90.100.1", Endpoint::Up(1))]));
     let manifest = client_with(&fake, &store)
         .manifest("tester", "secret")
         .unwrap();
@@ -380,14 +380,14 @@ fn invalid_manifest_bootstrap_keeps_servers_and_previous_configuration() {
 fn unreachable_latest_configuration_falls_back_to_embedded() {
     let (_dir, store) = store();
     store
-        .save(&config(1, &["http://198.51.100.1", "http://198.51.100.2"]))
+        .save(&config(1, &["http://45.90.100.1", "http://45.90.100.2"]))
         .unwrap();
     let fake = Arc::new(Fake::new(&[]));
     assert!(client_with(&fake, &store)
         .manifest("tester", "secret")
         .is_err());
     let tried: Vec<_> = fake.calls().into_iter().map(|(u, _)| u).collect();
-    assert_eq!(&tried[..2], ["http://198.51.100.1", "http://198.51.100.2"]);
+    assert_eq!(&tried[..2], ["http://45.90.100.1", "http://45.90.100.2"]);
     let pinned = Bootstrap::eddie();
     assert_eq!(tried.len(), 2 + pinned.urls.len());
     assert!(pinned
@@ -400,11 +400,11 @@ fn unreachable_latest_configuration_falls_back_to_embedded() {
 fn account_refusal_stops_failover_immediately() {
     let (_dir, store) = store();
     store
-        .save(&config(1, &["http://198.51.100.1", "http://198.51.100.2"]))
+        .save(&config(1, &["http://45.90.100.1", "http://45.90.100.2"]))
         .unwrap();
     let fake = Arc::new(Fake::new(&[
-        ("http://198.51.100.1", Endpoint::Refuses(1)),
-        ("http://198.51.100.2", Endpoint::Up(1)),
+        ("http://45.90.100.1", Endpoint::Refuses(1)),
+        ("http://45.90.100.2", Endpoint::Up(1)),
     ]));
     let error = client_with(&fake, &store)
         .login("tester", "wrong")
@@ -417,14 +417,14 @@ fn account_refusal_stops_failover_immediately() {
 #[test]
 fn periodic_refresh_requests_only_the_manifest() {
     let (_dir, store) = store();
-    store.save(&config(1, &["http://198.51.100.1"])).unwrap();
-    let fake = Arc::new(Fake::new(&[("http://198.51.100.1", Endpoint::Up(1))]));
+    store.save(&config(1, &["http://45.90.100.1"])).unwrap();
+    let fake = Arc::new(Fake::new(&[("http://45.90.100.1", Endpoint::Up(1))]));
     client_with(&fake, &store)
         .manifest("tester", "secret")
         .unwrap();
     assert_eq!(
         fake.calls(),
-        vec![("http://198.51.100.1".into(), "manifest".into())]
+        vec![("http://45.90.100.1".into(), "manifest".into())]
     );
 }
 
@@ -453,7 +453,7 @@ fn cancellation_stops_failover_between_attempts() {
 fn store_ignores_damaged_files_and_does_not_rewrite_unchanged_data() {
     let (dir, store) = store();
     assert!(store.load().is_none());
-    let good = config(1, &["http://198.51.100.1"]);
+    let good = config(1, &["http://45.90.100.1"]);
     assert!(store
         .save(&Bootstrap {
             urls: vec![],
@@ -478,7 +478,7 @@ fn store_ignores_damaged_files_and_does_not_rewrite_unchanged_data() {
         let inode = std::fs::metadata(store.path()).unwrap().ino();
         store.save(&good).unwrap();
         assert_eq!(std::fs::metadata(store.path()).unwrap().ino(), inode);
-        let changed = config(1, &["http://198.51.100.7"]);
+        let changed = config(1, &["http://45.90.100.7"]);
         store.save(&changed).unwrap();
         assert_eq!(store.load(), Some(changed));
         let link = dir.path().join("link.json");
@@ -508,12 +508,12 @@ fn staff_cancellation_in_failover_pause_prevents_the_next_post() {
 #[test]
 fn staff_cancelled_response_must_not_replace_persisted_bootstrap() {
     let (_dir, store) = store();
-    let previous = config(1, &["http://198.51.100.1"]);
+    let previous = config(1, &["http://45.90.100.1"]);
     store.save(&previous).unwrap();
     let cancel = Arc::new(AtomicBool::new(false));
     let flag = cancel.clone();
-    let mut fake = Fake::new(&[("http://198.51.100.1", Endpoint::Up(1))]);
-    fake.next_bootstrap = Some(config(2, &["http://203.0.113.77:8080"]));
+    let mut fake = Fake::new(&[("http://45.90.100.1", Endpoint::Up(1))]);
+    fake.next_bootstrap = Some(config(2, &["http://45.90.113.77:8080"]));
     fake.on_call = Box::new(move |_| flag.store(true, Ordering::SeqCst));
     let result = Client::with_transport(Arc::new(fake))
         .remembering(store.clone())
@@ -526,14 +526,14 @@ fn staff_cancelled_response_must_not_replace_persisted_bootstrap() {
 
 #[test]
 fn staff_malformed_bootstrap_fields_do_not_destroy_a_usable_server_list() {
-    let good = config(1, &["http://198.51.100.1"]);
+    let good = config(1, &["http://45.90.100.1"]);
     for invalid in [
         Bootstrap {
             urls: vec![],
             ..good.clone()
         },
         Bootstrap {
-            urls: vec!["https://user:secret@203.0.113.1".into()],
+            urls: vec!["https://user:secret@45.90.113.1".into()],
             ..good.clone()
         },
         Bootstrap {
@@ -541,7 +541,7 @@ fn staff_malformed_bootstrap_fields_do_not_destroy_a_usable_server_list() {
             ..good.clone()
         },
         Bootstrap {
-            urls: vec!["http://203.0.113.1".into(); MAX_URLS + 1],
+            urls: vec!["http://45.90.113.1".into(); MAX_URLS + 1],
             ..good.clone()
         },
     ] {
@@ -556,12 +556,12 @@ fn staff_malformed_bootstrap_fields_do_not_destroy_a_usable_server_list() {
 #[test]
 fn fix_cancel_requests_is_a_fence_for_in_flight_writes() {
     let (_dir, store) = store();
-    let previous = config(1, &["http://198.51.100.1"]);
+    let previous = config(1, &["http://45.90.100.1"]);
     store.save(&previous).unwrap();
     let cancel = Arc::new(AtomicBool::new(false));
     let flag = cancel.clone();
-    let mut fake = Fake::new(&[("http://198.51.100.1", Endpoint::Up(1))]);
-    fake.next_bootstrap = Some(config(2, &["http://203.0.113.77:8080"]));
+    let mut fake = Fake::new(&[("http://45.90.100.1", Endpoint::Up(1))]);
+    fake.next_bootstrap = Some(config(2, &["http://45.90.113.77:8080"]));
     // Sign-out happens while the POST is in flight, through the GUI's API.
     fake.on_call = Box::new(move |_| wave_protocol::cancel_requests(&flag));
     let result = Client::with_transport(Arc::new(fake))
@@ -575,11 +575,11 @@ fn fix_cancel_requests_is_a_fence_for_in_flight_writes() {
 #[test]
 fn fix_a_write_refused_after_cancellation_leaves_the_store_untouched() {
     let (_dir, store) = store();
-    let previous = config(1, &["http://198.51.100.1"]);
+    let previous = config(1, &["http://45.90.100.1"]);
     store.save(&previous).unwrap();
-    let next = config(2, &["http://203.0.113.77:8080"]);
+    let next = config(2, &["http://45.90.113.77:8080"]);
     let error = store
-        .save_fenced(&next, 1, &Default::default(), &|| false)
+        .save_fenced(&next, 1, &Default::default(), store.revision(), &|| false)
         .unwrap_err();
     assert!(error.is::<Cancelled>());
     assert_eq!(store.load(), Some(previous));
@@ -588,17 +588,23 @@ fn fix_a_write_refused_after_cancellation_leaves_the_store_untouched() {
 #[test]
 fn fix_an_old_session_response_cannot_roll_back_a_newer_bootstrap() {
     let (_dir, store) = store();
-    let newer = config(2, &["http://203.0.113.20"]);
+    let newer = config(2, &["http://45.90.113.20"]);
     // A later session already stored the bootstrap of a manifest from t=2000.
     assert_eq!(
         store
-            .save_fenced(&newer, 2_000, &Default::default(), &|| true)
+            .save_fenced(
+                &newer,
+                2_000,
+                &Default::default(),
+                store.revision(),
+                &|| true
+            )
             .unwrap(),
         Saved::Written
     );
     // The earlier session's response (manifest t=1000) completes afterwards.
-    let mut fake = Fake::new(&[("http://203.0.113.20", Endpoint::Up(2))]);
-    fake.next_bootstrap = Some(config(3, &["http://203.0.113.10"]));
+    let mut fake = Fake::new(&[("http://45.90.113.20", Endpoint::Up(2))]);
+    fake.next_bootstrap = Some(config(3, &["http://45.90.113.10"]));
     fake.manifest_time = Some(1_000);
     let manifest = client_with(&Arc::new(fake), &store)
         .manifest("tester", "synthetic")
@@ -607,8 +613,8 @@ fn fix_an_old_session_response_cannot_roll_back_a_newer_bootstrap() {
     assert_eq!(store.load(), Some(newer.clone()));
     assert_eq!(store.latest().issued, 2_000);
     // The same or a newer manifest is accepted.
-    let mut fake = Fake::new(&[("http://203.0.113.20", Endpoint::Up(2))]);
-    let rotated = config(4, &["http://203.0.113.30"]);
+    let mut fake = Fake::new(&[("http://45.90.113.20", Endpoint::Up(2))]);
+    let rotated = config(4, &["http://45.90.113.30"]);
     fake.next_bootstrap = Some(rotated.clone());
     fake.manifest_time = Some(3_000);
     client_with(&Arc::new(fake), &store)
@@ -621,14 +627,14 @@ fn fix_an_old_session_response_cannot_roll_back_a_newer_bootstrap() {
 fn fix_concurrent_writers_keep_the_newest_manifest() {
     let (_dir, store) = store();
     let configs: Vec<_> = (0..8u64)
-        .map(|i| config(2, &[&format!("http://203.0.113.{}", 40 + i)]))
+        .map(|i| config(2, &[&format!("http://45.90.113.{}", 40 + i)]))
         .collect();
     std::thread::scope(|scope| {
         for (i, c) in configs.iter().enumerate() {
             let store = store.clone();
             scope.spawn(move || {
                 store
-                    .save_fenced(c, 100 + i as u64, &Default::default(), &|| true)
+                    .save_fenced(c, 100 + i as u64, &Default::default(), 0, &|| true)
                     .unwrap();
             });
         }
@@ -640,7 +646,7 @@ fn fix_concurrent_writers_keep_the_newest_manifest() {
 #[test]
 fn fix_version_one_store_files_still_load() {
     let (_dir, store) = store();
-    let latest = config(1, &["http://198.51.100.1"]);
+    let latest = config(1, &["http://45.90.100.1"]);
     std::fs::create_dir_all(store.path().parent().unwrap()).unwrap();
     std::fs::write(
         store.path(),
@@ -658,12 +664,12 @@ fn fix_hostname_bootstrap_is_resolved_once_pinned_and_exempted() {
         2,
         &[
             "https://bootstrap.example:4443",
-            "http://[2001:db8::77]:8443",
+            "http://[2a01:4f8::77]:8443",
         ],
     );
-    let mut fake = Fake::new(&[("http://198.51.100.1", Endpoint::Up(1))]);
+    let mut fake = Fake::new(&[("http://45.90.100.1", Endpoint::Up(1))]);
     fake.next_bootstrap = Some(rotated.clone());
-    store.save(&config(1, &["http://198.51.100.1"])).unwrap();
+    store.save(&config(1, &["http://45.90.100.1"])).unwrap();
     let lookups = Arc::new(Mutex::new(Vec::<String>::new()));
     let seen = lookups.clone();
     Client::with_transport(Arc::new(fake))
@@ -671,10 +677,10 @@ fn fix_hostname_bootstrap_is_resolved_once_pinned_and_exempted() {
         .resolving(move |name| {
             seen.lock().unwrap().push(name.to_owned());
             Some(vec![
-                "203.0.113.80".parse().unwrap(),
+                "45.90.113.80".parse().unwrap(),
                 "10.0.0.1".parse().unwrap(), // never exempted
                 "127.0.0.1".parse().unwrap(),
-                "2001:db8::80".parse().unwrap(),
+                "2a01:4f8::80".parse().unwrap(),
             ])
         })
         .pausing(|_| ())
@@ -690,15 +696,16 @@ fn fix_hostname_bootstrap_is_resolved_once_pinned_and_exempted() {
     assert_eq!(
         latest.resolved["bootstrap.example"],
         vec![
-            "203.0.113.80".parse::<std::net::IpAddr>().unwrap(),
-            "2001:db8::80".parse().unwrap()
+            "45.90.113.80".parse::<std::net::IpAddr>().unwrap(),
+            "2a01:4f8::80".parse().unwrap()
         ]
     );
     let exemptions = store.exemptions();
+    // Literal addresses first, then hostname addresses (shared selection).
     let expected: Vec<Exemption> = [
-        ("203.0.113.80", 4443),
-        ("2001:db8::80", 4443),
-        ("2001:db8::77", 8443),
+        ("2a01:4f8::77", 8443),
+        ("45.90.113.80", 4443),
+        ("2a01:4f8::80", 4443),
     ]
     .iter()
     .map(|(ip, port)| Exemption {
@@ -712,11 +719,12 @@ fn fix_hostname_bootstrap_is_resolved_once_pinned_and_exempted() {
         None,
         true,
         &exemptions,
+        Some(1000),
     )
     .unwrap();
-    assert!(rules.contains("ip daddr 203.0.113.80 tcp dport 4443 accept"));
-    assert!(rules.contains("ip6 daddr 2001:db8::80 tcp dport 4443 accept"));
-    assert!(rules.contains("ip6 daddr 2001:db8::77 tcp dport 8443 accept"));
+    assert!(rules.contains("ip daddr 45.90.113.80 tcp dport 4443 accept"));
+    assert!(rules.contains("ip6 daddr 2a01:4f8::80 tcp dport 4443 accept"));
+    assert!(rules.contains("ip6 daddr 2a01:4f8::77 tcp dport 8443 accept"));
     assert!(!rules.contains("10.0.0.1") && !rules.contains("127.0.0.1"));
     assert!(!rules.contains("bootstrap.example"));
 
@@ -734,8 +742,8 @@ fn fix_hostname_bootstrap_is_resolved_once_pinned_and_exempted() {
         vec![(
             "https://bootstrap.example:4443".to_owned(),
             vec![
-                "203.0.113.80:4443".parse().unwrap(),
-                "[2001:db8::80]:4443".parse().unwrap()
+                "45.90.113.80:4443".parse().unwrap(),
+                "[2a01:4f8::80]:4443".parse().unwrap()
             ]
         )]
     );
@@ -747,18 +755,18 @@ fn fix_failed_hostname_lookup_keeps_previous_addresses_only_for_listed_hosts() {
     let previous = Resolved::from([
         (
             "bootstrap.example".to_owned(),
-            vec!["203.0.113.5".parse().unwrap()],
+            vec!["45.90.113.5".parse().unwrap()],
         ),
         (
             "retired.example".to_owned(),
-            vec!["203.0.113.6".parse().unwrap()],
+            vec!["45.90.113.6".parse().unwrap()],
         ),
     ]);
     let kept = resolve_hosts(&host, &previous, &|_| None);
     assert_eq!(kept.len(), 1);
     assert_eq!(kept["bootstrap.example"], previous["bootstrap.example"]);
     let many: Vec<std::net::IpAddr> = (1..=9)
-        .map(|i| format!("203.0.113.{i}").parse().unwrap())
+        .map(|i| format!("45.90.113.{i}").parse().unwrap())
         .collect();
     let bounded = resolve_hosts(&host, &Resolved::new(), &|_| Some(many.clone()));
     assert_eq!(bounded["bootstrap.example"].len(), MAX_ADDRESSES_PER_HOST);
@@ -771,8 +779,8 @@ fn fix_exemption_validation_rejects_unsafe_addresses_and_ports() {
         port,
     };
     for (ip, port) in [
-        ("203.0.113.77", 8080),
-        ("2001:db8::77", 443),
+        ("45.90.113.77", 8080),
+        ("2a01:4f8::77", 443),
         ("63.33.78.166", 80),
     ] {
         ok(ip, port).validate().unwrap();
@@ -793,10 +801,10 @@ fn fix_exemption_validation_rejects_unsafe_addresses_and_ports() {
         ("fd00::1", 80),
         ("fe80::1", 80),
         ("ff02::1", 80),
-        ("::ffff:203.0.113.1", 80),
-        ("203.0.113.77", 0),
-        ("203.0.113.77", 53),
-        ("203.0.113.77", 853),
+        ("::ffff:45.90.113.1", 80),
+        ("45.90.113.77", 0),
+        ("45.90.113.77", 53),
+        ("45.90.113.77", 853),
     ] {
         let e = ok(ip, port);
         assert!(e.validate().is_err(), "accepted {ip}:{port}");
@@ -805,14 +813,15 @@ fn fix_exemption_validation_rejects_unsafe_addresses_and_ports() {
                 &wave_protocol::options::Options::default(),
                 None,
                 true,
-                &[e]
+                &[e],
+                Some(1000),
             )
             .is_err(),
             "policy accepted {ip}:{port}"
         );
     }
     let too_many: Vec<_> = (1..=MAX_EXEMPTIONS as u16 + 1)
-        .map(|p| ok("203.0.113.77", 1000 + p))
+        .map(|p| ok("45.90.113.77", 1000 + p))
         .collect();
     assert!(validate_exemptions(&too_many).is_err());
     assert!(validate_exemptions(&too_many[..MAX_EXEMPTIONS]).is_ok());
@@ -824,24 +833,28 @@ fn fix_rotation_replaces_old_latest_exemptions_and_keeps_embedded_fallback() {
     let options = wave_protocol::options::Options::default();
     store
         .save_fenced(
-            &config(1, &["http://203.0.113.10"]),
+            &config(1, &["http://45.90.113.10"]),
             100,
             &Default::default(),
+            store.revision(),
             &|| true,
         )
         .unwrap();
     store
         .save_fenced(
-            &config(2, &["http://203.0.113.11:8081"]),
+            &config(2, &["http://45.90.113.11:8081"]),
             200,
             &Default::default(),
+            store.revision(),
             &|| true,
         )
         .unwrap();
-    let rules = wave_protocol::firewall::policy(&options, None, true, &store.exemptions()).unwrap();
-    assert!(rules.contains("ip daddr 203.0.113.11 tcp dport 8081 accept"));
+    let rules =
+        wave_protocol::firewall::policy(&options, None, true, &store.exemptions(), Some(1000))
+            .unwrap();
+    assert!(rules.contains("ip daddr 45.90.113.11 tcp dport 8081 accept"));
     assert!(
-        !rules.contains("203.0.113.10"),
+        !rules.contains("45.90.113.10"),
         "retired endpoint stays blocked"
     );
     for e in wave_protocol::firewall::embedded_exemptions() {
@@ -856,4 +869,95 @@ fn fix_rotation_replaces_old_latest_exemptions_and_keeps_embedded_fallback() {
         assert!(line.contains(" daddr "), "{line}");
         assert!(!line.contains("dport 53") && !line.contains("dport 853"));
     }
+}
+
+// F2 wiring: under Network Lock outside the tunnel a hostname without a pin
+// is skipped (never ordinary DNS); a pinned hostname uses only its pins.
+#[test]
+fn recheck_required_pins_skip_unpinned_hostnames() {
+    let (_dir, store) = store();
+    store
+        .save(&config(
+            1,
+            &["https://pinned.example:4443", "http://45.90.100.1"],
+        ))
+        .unwrap();
+    // Without a stored pin the hostname is never contacted when pins are required.
+    let fake = Arc::new(Fake::new(&[("http://45.90.100.1", Endpoint::Up(1))]));
+    client_with(&fake, &store)
+        .requiring_pins(true)
+        .resolving(|_| None)
+        .manifest("tester", "synthetic")
+        .unwrap();
+    assert!(fake.calls().iter().all(|(u, _)| !u.contains("example")));
+    assert!(fake.pinned.lock().unwrap().is_empty());
+    // The embedded definition's hostname (bootme.org) is skipped too.
+    let fake = Arc::new(Fake::new(&[]));
+    let _ = client_with(&fake, &store)
+        .requiring_pins(true)
+        .manifest("tester", "synthetic");
+    assert!(fake
+        .calls()
+        .iter()
+        .all(|(u, _)| !u.contains("bootme.org") && !u.contains("example")));
+    // Not required (no lock or inside the tunnel): ordinary resolution is allowed.
+    let fake = Arc::new(Fake::new(&[]));
+    let _ = client_with(&fake, &store).manifest("tester", "synthetic");
+    assert!(fake
+        .calls()
+        .iter()
+        .any(|(u, _)| u.contains("pinned.example")));
+}
+
+// F4 wiring: the base revision is captured before the request, so a write by
+// another session during the request wins an equal manifest time.
+#[test]
+fn recheck_write_during_request_fences_an_equal_time_response() {
+    let (_dir, store) = store();
+    store.save(&config(1, &["http://45.90.100.1"])).unwrap();
+    let concurrent = config(2, &["http://45.90.100.2"]);
+    let mut fake = Fake::new(&[("http://45.90.100.1", Endpoint::Up(1))]);
+    fake.next_bootstrap = Some(config(3, &["http://45.90.100.3"]));
+    fake.manifest_time = Some(500);
+    let writer = store.clone();
+    let other = concurrent.clone();
+    fake.on_call = Box::new(move |_| {
+        let base = writer.revision();
+        writer
+            .save_fenced(&other, 500, &Default::default(), base, &|| true)
+            .unwrap();
+    });
+    client_with(&Arc::new(fake), &store)
+        .manifest("tester", "synthetic")
+        .unwrap();
+    assert_eq!(store.load(), Some(concurrent));
+}
+
+// Bounded adoption: once the budget predicate turns false no new lookup
+// starts; remaining hosts keep previous addresses.
+#[test]
+fn recheck_hostname_resolution_stops_at_the_budget() {
+    let b = config(
+        1,
+        &[
+            "https://a.example",
+            "https://b.example",
+            "https://c.example",
+        ],
+    );
+    let previous: Resolved = [("c.example".to_owned(), vec!["8.8.8.3".parse().unwrap()])].into();
+    let calls = std::sync::atomic::AtomicUsize::new(0);
+    let resolved = wave_protocol::bootstrap::resolve_hosts_bounded(
+        &b,
+        &previous,
+        &|_| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Some(vec!["8.8.8.1".parse().unwrap()])
+        },
+        &|| calls.load(Ordering::SeqCst) < 1,
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(resolved.len(), 2, "a.example looked up, c.example kept");
+    assert_eq!(resolved["c.example"], previous["c.example"]);
+    assert!(wave_protocol::bootstrap::RESOLVE_BUDGET <= Duration::from_secs(6));
 }

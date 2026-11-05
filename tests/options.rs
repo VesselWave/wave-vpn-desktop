@@ -18,7 +18,7 @@ fn privileged_inputs_reject_injection_and_invalid_ranges() {
         let mut o = Options::default();
         o.set(key, value.into());
         assert!(o.validate().is_err(), "accepted {key}={value}");
-        assert!(firewall::policy(&o, None, true, &[]).is_err());
+        assert!(firewall::policy(&o, None, true, &[], Some(1000)).is_err());
     }
 }
 #[test]
@@ -27,7 +27,7 @@ fn explicit_bypass_routes_and_forwarding_are_validated() {
     o.set("routes", "192.0.2.0/24,out;2001:db8::/32,in".into());
     o.set("forward_interfaces", "eth1,br0".into());
     o.validate().unwrap();
-    let policy = firewall::policy(&o, None, true, &[]).unwrap();
+    let policy = firewall::policy(&o, None, true, &[], Some(1000)).unwrap();
     assert!(policy.contains("ip daddr 192.0.2.0/24 accept"));
     assert!(policy.contains("iifname \"br0\" oifname \"wavevpn0\" masquerade"));
 }

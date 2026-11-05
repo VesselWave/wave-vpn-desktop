@@ -252,6 +252,18 @@ pub fn network_status() -> Result<()> {
     );
     Ok(())
 }
+/// The UID bootstrap exemptions are limited to: the service's authorized
+/// desktop user, else the user who invoked this root CLI through sudo/pkexec
+/// (the broker clears the environment, so this applies only to direct runs).
+/// Unknown: supplied exemptions are omitted.
+fn client_uid() -> Option<u32> {
+    crate::service::authorized_uid().or_else(|| {
+        ["SUDO_UID", "PKEXEC_UID"]
+            .iter()
+            .find_map(|k| std::env::var(k).ok()?.parse::<u32>().ok())
+            .filter(|uid| *uid > 0)
+    })
+}
 /// Replace the table in one nft transaction, so a rotated exemption set never
 /// leaves a window without the lock.
 fn set_firewall(
@@ -264,7 +276,7 @@ fn set_firewall(
     if owned_firewall()? {
         batch.push_str("delete table inet wave_vpn\n");
     }
-    batch.push_str(&firewall::policy(o, p, locked, bootstrap)?);
+    batch.push_str(&firewall::policy(o, p, locked, bootstrap, client_uid())?);
     run("nft", &["-f", "-"], Some(batch.as_bytes()))?;
     atomic(SESSION_BOOTSTRAP, &serde_json::to_vec(bootstrap)?)?;
     publish_protection(locked)?;

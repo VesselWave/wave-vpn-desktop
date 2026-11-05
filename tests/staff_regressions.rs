@@ -163,14 +163,16 @@ fn staff_network_lock_must_exempt_latest_bootstrap_ip_port() {
     let directory = tempfile::tempdir().unwrap();
     let store = wave_protocol::BootstrapStore::in_directory(directory.path());
     let mut latest = wave_protocol::Bootstrap::eddie();
-    latest.urls = vec!["http://203.0.113.77:8080".into()];
+    latest.urls = vec!["http://45.90.113.77:8080".into()];
     store.save(&latest).unwrap();
     assert_eq!(store.load(), Some(latest));
     let mut options = wave_protocol::options::Options::default();
     options.set("allow_lan", "false".into());
-    let rules = wave_protocol::firewall::policy(&options, None, true, &store.exemptions()).unwrap();
+    let rules =
+        wave_protocol::firewall::policy(&options, None, true, &store.exemptions(), Some(1000))
+            .unwrap();
     assert!(
-        rules.contains("ip daddr 203.0.113.77 tcp dport 8080 accept"),
+        rules.contains("ip daddr 45.90.113.77 tcp dport 8080 accept"),
         "rotated bootstrap is blocked under default-drop policy"
     );
 }

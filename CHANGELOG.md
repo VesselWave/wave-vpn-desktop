@@ -20,6 +20,15 @@ Lighter on AirVPN's infrastructure, following AirVPN staff feedback.
 - Network Lock follows bootstrap rotation: the latest manifest's validated sign-in IP/port pairs (and resolved addresses of sign-in hostnames) are passed to the helper and applied to the session and boot locks; unsafe addresses and DNS ports are refused
 - Cancelling sign-in or refresh (sign-out) now also stops a late response from being saved, and a response from an older manifest can no longer overwrite a newer saved bootstrap
 
+**Fixed** (independent recheck, [details](docs/STAFF-REGRESSION-RECHECK.md#resolution--repair-round-2))
+
+- Network Lock bootstrap exceptions apply only to the authorized desktop user's apps, are shown in the Network Lock settings and diagnostics, and are documented as bounded but not provider-verified
+- Client pinning and the helper's exceptions use one shared 16-address selection (every sign-in hostname keeps addresses); under Network Lock outside the tunnel an unpinned hostname is skipped instead of looked up through ordinary DNS
+- A failed Network Lock update is no longer treated as applied: the previous set is kept and the update is retried while idle with backoff (30 s to 15 min), with reinstall advice for an older helper
+- A late response with the same or an unknown manifest time can no longer replace a configuration saved after its request started, in any process
+- Exceptions refuse every non-public address, including IPv6 site-local, discard-only, documentation, 6to4, Teredo and NAT64 ranges
+- Simultaneous app instances share one latency probe cooldown; adopting a manifest spends at most about 9 s resolving sign-in hostnames
+
 ## 0.1.1 · 2026-11-03 · early release
 
 New look; interface only. [Release notes](docs/RELEASE-v0.1.1.md).

@@ -481,6 +481,45 @@ impl LatencyStore {
             });
         valid.then_some(stored)
     }
+    /// Cross-process admission: under an exclusive lock on the store, start
+    /// a run (`begin`, then persist its cooldown) only if no other instance's
+    /// persisted cooldown is still running; otherwise adopt that instance's
+    /// results and cooldown and return None. Simultaneous app instances thus
+    /// share one probe budget. If the lock or save fails, the run proceeds
+    /// with this instance's own cooldown (best effort, as before).
+    pub fn admit(
+        &self,
+        cache: &mut LatencyCache,
+        now: Instant,
+        begin: impl FnOnce(&mut LatencyCache) -> u64,
+    ) -> Option<u64> {
+        self.admit_at(cache, now, now_unix(), begin)
+    }
+    pub fn admit_at(
+        &self,
+        cache: &mut LatencyCache,
+        now: Instant,
+        wall: u64,
+        begin: impl FnOnce(&mut LatencyCache) -> u64,
+    ) -> Option<u64> {
+        let lock = self
+            .path
+            .parent()
+            .filter(|d| std::fs::create_dir_all(d).is_ok())
+            .and_then(|_| {
+                crate::bootstrap::FileLock::exclusive(&self.path.with_extension("lock")).ok()
+            });
+        if lock.is_some() && self.read().is_some_and(|s| s.next > wall) {
+            self.load_at(cache, now, wall);
+            if cache.next.is_some_and(|t| t > now) {
+                return None;
+            }
+        }
+        let generation = begin(cache);
+        let _ = self.save_at(cache, now, wall);
+        drop(lock);
+        Some(generation)
+    }
     pub fn save(&self, cache: &LatencyCache, now: Instant) -> anyhow::Result<()> {
         self.save_at(cache, now, now_unix())
     }

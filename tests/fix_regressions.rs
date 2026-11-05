@@ -37,7 +37,7 @@ impl checks::Probe for Scripted {
         self.requests += 1;
         match self.tunnel.remove(0) {
             Some(true) => Ok(serde_json::json!({"ip": local.to_string()})),
-            Some(false) => Ok(serde_json::json!({"ip": "198.51.100.99"})),
+            Some(false) => Ok(serde_json::json!({"ip": "45.90.100.99"})),
             None => anyhow::bail!("service unavailable"),
         }
     }
@@ -54,7 +54,7 @@ impl checks::Probe for Scripted {
 fn check() -> ProviderCheck {
     ProviderCheck {
         server: "Alpha".into(),
-        exits: vec!["198.51.100.1".parse().unwrap()],
+        exits: vec!["45.90.100.1".parse().unwrap()],
         domain: "airservers.org:89".into(),
         dns_query: "{hash}.checkdns.airvpn.org".into(),
     }
@@ -232,7 +232,7 @@ fn fix_account_document_is_added_to_automatic_refresh_only_daily() {
 fn fix_lock_input_accepts_structured_and_legacy_forms_and_rejects_unsafe_exemptions() {
     let options = Options::default();
     let rotated = Exemption {
-        ip: "203.0.113.77".parse().unwrap(),
+        ip: "45.90.113.77".parse().unwrap(),
         port: 8080,
     };
     let structured = serde_json::to_vec(&LockInput {
@@ -249,10 +249,10 @@ fn fix_lock_input_accepts_structured_and_legacy_forms_and_rejects_unsafe_exempti
     assert_eq!(LockInput::parse(b"").unwrap(), LockInput::default());
     for bad in [
         serde_json::json!({"options":{},"bootstrap":[{"ip":"10.0.0.1","port":80}]}),
-        serde_json::json!({"options":{},"bootstrap":[{"ip":"203.0.113.77","port":53}]}),
+        serde_json::json!({"options":{},"bootstrap":[{"ip":"45.90.113.77","port":53}]}),
         serde_json::json!({"options":{},"bootstrap":[{"ip":"bootstrap.example","port":80}]}),
-        serde_json::json!({"options":{},"bootstrap":[{"ip":"203.0.113.0/24","port":80}]}),
-        serde_json::json!({"options":{},"bootstrap":[{"ip":"203.0.113.77","port":80,"proto":"udp"}]}),
+        serde_json::json!({"options":{},"bootstrap":[{"ip":"45.90.113.0/24","port":80}]}),
+        serde_json::json!({"options":{},"bootstrap":[{"ip":"45.90.113.77","port":80,"proto":"udp"}]}),
         serde_json::json!({"options":{},"bootstrap":"0.0.0.0/0"}),
         serde_json::json!({"options":{"unknown":"x"},"bootstrap":[]}),
         serde_json::json!({"options":{},"bootstrap":[],"extra":true}),
@@ -263,7 +263,7 @@ fn fix_lock_input_accepts_structured_and_legacy_forms_and_rejects_unsafe_exempti
         );
     }
     let many: Vec<_> = (0..=MAX_EXEMPTIONS as u16)
-        .map(|p| serde_json::json!({"ip":"203.0.113.77","port":2000 + p}))
+        .map(|p| serde_json::json!({"ip":"45.90.113.77","port":2000 + p}))
         .collect();
     let too_many = serde_json::json!({"options":{},"bootstrap":many});
     assert!(LockInput::parse(&serde_json::to_vec(&too_many).unwrap()).is_err());
@@ -272,7 +272,7 @@ fn fix_lock_input_accepts_structured_and_legacy_forms_and_rejects_unsafe_exempti
 #[test]
 fn fix_persistent_lock_restores_rotated_exemptions_after_restart() {
     let rotated = Exemption {
-        ip: "2001:db8::77".parse().unwrap(),
+        ip: "2a01:4f8::77".parse().unwrap(),
         port: 8443,
     };
     let saved = serde_json::to_vec(&PersistentLock {
@@ -283,9 +283,15 @@ fn fix_persistent_lock_restores_rotated_exemptions_after_restart() {
     .unwrap();
     // Boot: lock-restore parses the root-only file and applies the policy.
     let restored = PersistentLock::parse(&saved).unwrap();
-    let rules = wave_protocol::firewall::policy(&restored.options, None, true, &restored.bootstrap)
-        .unwrap();
-    assert!(rules.contains("ip6 daddr 2001:db8::77 tcp dport 8443 accept"));
+    let rules = wave_protocol::firewall::policy(
+        &restored.options,
+        None,
+        true,
+        &restored.bootstrap,
+        Some(1000),
+    )
+    .unwrap();
+    assert!(rules.contains("ip6 daddr 2a01:4f8::77 tcp dport 8443 accept"));
     // Pre-upgrade files have no list; damaged entries are dropped, never fatal.
     let legacy = serde_json::json!({"options":{},"enabled":true});
     assert!(PersistentLock::parse(&serde_json::to_vec(&legacy).unwrap())
@@ -293,13 +299,13 @@ fn fix_persistent_lock_restores_rotated_exemptions_after_restart() {
         .bootstrap
         .is_empty());
     let damaged = serde_json::json!({"options":{},"enabled":true,
-        "bootstrap":[{"ip":"127.0.0.1","port":80},{"ip":"203.0.113.9","port":80}]});
+        "bootstrap":[{"ip":"127.0.0.1","port":80},{"ip":"45.90.113.9","port":80}]});
     assert_eq!(
         PersistentLock::parse(&serde_json::to_vec(&damaged).unwrap())
             .unwrap()
             .bootstrap,
         vec![Exemption {
-            ip: "203.0.113.9".parse().unwrap(),
+            ip: "45.90.113.9".parse().unwrap(),
             port: 80
         }]
     );
@@ -310,7 +316,7 @@ fn fix_worker_request_carries_exemptions_and_rejects_unknown_fields() {
     let request = serde_json::json!({
         "profile": {"private_key":"x","preshared_key":"x","public_key":"x","addresses":[],
             "dns":[],"endpoint":"192.0.2.1","port":1637},
-        "options": {}, "bootstrap": [{"ip":"203.0.113.77","port":8080}]
+        "options": {}, "bootstrap": [{"ip":"45.90.113.77","port":8080}]
     });
     let r = serde_json::from_value::<wave_protocol::transport::Request>(request.clone()).unwrap();
     assert_eq!(r.bootstrap[0].port, 8080);

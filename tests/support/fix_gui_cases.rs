@@ -49,7 +49,13 @@ fn rotate(app: &Wave, url: &str, issued: u64) {
     let mut latest = wave_protocol::Bootstrap::eddie();
     latest.urls = vec![url.into()];
     app.bootstrap
-        .save_fenced(&latest, issued, &Default::default(), &|| true)
+        .save_fenced(
+            &latest,
+            issued,
+            &Default::default(),
+            app.bootstrap.revision(),
+            &|| true,
+        )
         .unwrap();
 }
 fn refreshed(app: &mut Wave, manual: bool, account: Option<Account>) {
@@ -108,14 +114,14 @@ fn fix_bootstrap_rotation_updates_an_active_lock_through_the_helper() {
     let mut app = app(&dir);
     app.test_helper = Some(true);
     app.guarded = true;
-    rotate(&app, "http://203.0.113.77:8080", 100);
+    rotate(&app, "http://45.90.113.77:8080", 100);
     refreshed(&mut app, false, None);
     let (action, input) = app.test_privileged.last().cloned().unwrap();
     assert_eq!(action, "lock-update");
     assert_eq!(
         input.bootstrap,
         vec![Exemption {
-            ip: "203.0.113.77".parse().unwrap(),
+            ip: "45.90.113.77".parse().unwrap(),
             port: 8080
         }]
     );
@@ -125,12 +131,12 @@ fn fix_bootstrap_rotation_updates_an_active_lock_through_the_helper() {
         wave_protocol::transport::LockInput::parse(&bytes).unwrap(),
         input
     );
-    // Unchanged bootstrap: no further helper call.
-    app.network_busy = false;
+    // Confirmed by the helper; unchanged bootstrap: no further helper call.
+    helper_done(&mut app, Ok(()));
     refreshed(&mut app, false, None);
     assert_eq!(app.test_privileged.len(), 1);
     // Rotation while connected waits for the connection to end.
-    rotate(&app, "http://[2001:db8::77]:8443", 200);
+    rotate(&app, "http://[2a01:4f8::77]:8443", 200);
     app.control = Some(Arc::new(Mutex::new(WorkerControl::default())));
     app.since = Some(Instant::now());
     refreshed(&mut app, false, None);
@@ -149,7 +155,7 @@ fn fix_rotation_without_a_lock_or_helper_never_calls_or_prompts() {
     let dir = tempfile::tempdir().unwrap();
     let mut app = app(&dir);
     app.test_helper = Some(true);
-    rotate(&app, "http://203.0.113.77:8080", 100);
+    rotate(&app, "http://45.90.113.77:8080", 100);
     refreshed(&mut app, false, None);
     assert!(app.test_privileged.is_empty(), "no lock: nothing to update");
     app.guarded = true;
@@ -167,11 +173,16 @@ fn fix_lock_actions_send_the_latest_exemptions() {
     let mut app = app(&dir);
     app.preview = false; // the test hook replaces the helper process
     app.test_helper = Some(true);
-    rotate(&app, "http://203.0.113.77:8080", 100);
+    rotate(&app, "http://45.90.113.77:8080", 100);
     let _ = app.update(Message::LockAction("lock-enable"));
     let (action, input) = app.test_privileged.last().cloned().unwrap();
     assert_eq!(action, "lock-enable");
     assert_eq!(input.bootstrap.len(), 1);
+    assert!(
+        app.applied_exemptions.is_none(),
+        "not confirmed before success"
+    );
+    helper_done(&mut app, Ok(()));
     assert_eq!(
         app.applied_exemptions.as_deref(),
         Some(&input.bootstrap[..])
@@ -183,7 +194,7 @@ fn fix_lock_restored_at_boot_is_synced_once_status_confirms_it() {
     let dir = tempfile::tempdir().unwrap();
     let mut app = app(&dir);
     app.test_helper = Some(true);
-    rotate(&app, "http://203.0.113.77:8080", 100);
+    rotate(&app, "http://45.90.113.77:8080", 100);
     app.sender
         .send(Event::NetworkStatus(
             app.network_revision,
@@ -212,10 +223,10 @@ fn fix_sign_out_fences_bootstrap_writes_of_the_old_session() {
     let _ = app.update(Message::Tick);
     assert!(old.load(Ordering::SeqCst));
     let mut late = wave_protocol::Bootstrap::eddie();
-    late.urls = vec!["http://203.0.113.99".into()];
+    late.urls = vec!["http://45.90.113.99".into()];
     let error = app
         .bootstrap
-        .save_fenced(&late, 1, &Default::default(), &|| {
+        .save_fenced(&late, 1, &Default::default(), 0, &|| {
             !old.load(Ordering::SeqCst)
         })
         .unwrap_err();
@@ -322,9 +333,21 @@ fn fix_no_probes_while_connecting_connected_or_changing_the_lock() {
     assert!(!app.latency.due(now, app.probes_blocked()), "connected");
 }
 
-// Independent recheck: passing characterization of the failed update gap.
+/// Deliver the outcome of the last privileged action, as the helper thread does.
+fn helper_done(app: &mut Wave, result: Result<(), &str>) {
+    app.sender
+        .send(Event::Notice(
+            Some(app.exemptions_generation),
+            result.map(|()| String::new()).map_err(str::to_owned),
+        ))
+        .unwrap();
+    let _ = app.update(Message::Tick);
+}
+
+// F3: a failed update is not acknowledged; it is retried once idle after a
+// bounded backoff (not every tick), and success then confirms it.
 #[test]
-fn observed_failed_lock_update_is_marked_applied_and_not_retried() {
+fn recheck_failed_lock_update_is_retried_with_backoff_until_confirmed() {
     let dir = tempfile::tempdir().unwrap();
     let mut app = app(&dir);
     app.test_helper = Some(true);
@@ -332,25 +355,71 @@ fn observed_failed_lock_update_is_marked_applied_and_not_retried() {
     rotate(&app, "https://8.8.8.8:4443", 100);
     refreshed(&mut app, false, None);
     assert_eq!(app.test_privileged.len(), 1);
-    app.sender
-        .send(Event::Notice(Err(
-            "nft: synthetic transaction failure".into()
-        )))
-        .unwrap();
-    let _ = app.update(Message::Tick);
+    helper_done(&mut app, Err("nft: synthetic transaction failure"));
     assert!(!app.network_busy);
     assert!(app
         .error
         .as_deref()
         .unwrap()
         .contains("synthetic transaction failure"));
+    assert!(app.applied_exemptions.is_none());
+    assert!(app.exemptions_pending);
+    let retry = app.exemptions_retry_at.unwrap();
+    assert!(retry >= Instant::now() + Duration::from_secs(25));
+    // Ticks and refreshes during the backoff make no helper call.
+    for _ in 0..5 {
+        let _ = app.update(Message::Tick);
+    }
     refreshed(&mut app, false, None);
-    assert_eq!(
-        app.test_privileged.len(),
-        1,
-        "failed update is never retried"
+    assert_eq!(app.test_privileged.len(), 1, "no retry every tick");
+    // Once due and idle, exactly one retry with the same set.
+    app.exemptions_retry_at = Some(Instant::now());
+    let _ = app.update(Message::Tick);
+    assert_eq!(app.test_privileged.len(), 2);
+    assert_eq!(app.test_privileged[1].0, "lock-update");
+    // A stale outcome (older generation) confirms nothing.
+    app.sender
+        .send(Event::Notice(
+            Some(app.exemptions_generation - 1),
+            Ok(String::new()),
+        ))
+        .unwrap();
+    let _ = app.update(Message::Tick);
+    assert!(app.applied_exemptions.is_none());
+    // Second failure doubles the wait; an outdated helper gets upgrade advice.
+    app.network_busy = true;
+    helper_done(
+        &mut app,
+        Err("Networking service rejected or could not complete this request"),
     );
-    assert!(!app.exemptions_pending);
+    assert!(app.exemptions_retry_at.unwrap() >= Instant::now() + Duration::from_secs(55));
+    assert!(app.error.as_deref().unwrap().contains("install.sh install"));
+    app.exemptions_retry_at = Some(Instant::now());
+    let _ = app.update(Message::Tick);
+    assert_eq!(app.test_privileged.len(), 3);
+    helper_done(&mut app, Ok(()));
+    assert_eq!(
+        app.applied_exemptions.as_deref(),
+        Some(&app.test_privileged[2].1.bootstrap[..])
+    );
+    assert!(app.exemptions_retry_at.is_none() && !app.exemptions_pending);
+    refreshed(&mut app, false, None);
+    assert_eq!(app.test_privileged.len(), 3);
+}
+
+// A connection confirms its set only through the worker's protection event.
+#[test]
+fn recheck_connection_confirms_exemptions_only_after_the_worker_applies_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = app(&dir);
+    app.test_helper = Some(true);
+    app.guarded = true;
+    rotate(&app, "https://8.8.8.8:4443", 100);
+    app.connection_exemptions = Some(app.bootstrap.exemptions());
+    app.control = Some(Arc::new(Mutex::new(WorkerControl::default())));
+    assert!(app.applied_exemptions.is_none());
+    app.transport_line(r#"{"event":"protection","enabled":true}"#.into());
+    assert_eq!(app.applied_exemptions, Some(app.bootstrap.exemptions()));
 }
 
 #[test]

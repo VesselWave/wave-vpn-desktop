@@ -135,7 +135,9 @@ enum Event {
     Pings(u64, latency::Outcome),
     Line(String),
     End(String),
-    Notice(Result<String, String>),
+    /// A privileged action finished. Carries the exemption generation it
+    /// sent, if any, so only that exact set is confirmed on success.
+    Notice(Option<u64>, Result<String, String>),
     NetworkStatus(u64, Result<wave_protocol::protection::Status, String>),
     DiagnosticsSaved(Result<(), String>),
 }
@@ -200,9 +202,17 @@ struct Wave {
     requests_cancel: Arc<AtomicBool>,
     /// Latest manifest bootstrap; tests point it at a temporary directory.
     bootstrap: BootstrapStore,
-    /// Exemptions last handed to the helper (None: not yet this launch).
+    /// Exemptions the helper confirmed applying (None: not yet this launch).
     applied_exemptions: Option<Vec<Exemption>>,
-    /// The bootstrap rotated while the helper was busy; update when idle.
+    /// Sent to the helper and awaiting its result, with its generation.
+    exemptions_sent: Option<(u64, Vec<Exemption>)>,
+    exemptions_generation: u64,
+    /// Handed to a connection worker; confirmed by its protection event.
+    connection_exemptions: Option<Vec<Exemption>>,
+    /// Consecutive failed updates and the earliest idle retry.
+    exemptions_failures: u32,
+    exemptions_retry_at: Option<Instant>,
+    /// The confirmed set differs from the latest; update when idle.
     exemptions_pending: bool,
     account: Option<Account>,
     manifest: Option<Manifest>,
@@ -289,6 +299,11 @@ impl Wave {
             requests_cancel: Arc::new(AtomicBool::new(false)),
             bootstrap: BootstrapStore::in_directory(&preferences::directory()),
             applied_exemptions: None,
+            exemptions_sent: None,
+            exemptions_generation: 0,
+            connection_exemptions: None,
+            exemptions_failures: 0,
+            exemptions_retry_at: None,
             exemptions_pending: false,
             account: None,
             manifest: None,
@@ -679,6 +694,11 @@ impl Wave {
                                     wave_protocol::cancel_requests(&self.requests_cancel);
                                     self.requests_cancel = Arc::new(AtomicBool::new(false));
                                     self.applied_exemptions = None;
+                                    self.exemptions_sent = None;
+                                    self.exemptions_generation += 1;
+                                    self.connection_exemptions = None;
+                                    self.exemptions_failures = 0;
+                                    self.exemptions_retry_at = None;
                                     self.exemptions_pending = false;
                                     self.refresh.reset(Instant::now());
                                     self.retry_at = None;
@@ -734,6 +754,12 @@ impl Wave {
                         Event::End(message) => {
                             self.network_busy = false;
                             self.lock_change = None;
+                            self.connection_exemptions = None;
+                            // Re-check once idle: only calls the helper if the
+                            // confirmed set is not the latest.
+                            if self.guarded || self.persistent_lock {
+                                self.exemptions_pending = true;
+                            }
                             if self.quitting {
                                 return iced::exit();
                             }
@@ -795,8 +821,9 @@ impl Wave {
                                 self.log(Level::Info, "Disconnected".into());
                             }
                         }
-                        Event::Notice(result) => {
+                        Event::Notice(generation, result) => {
                             self.network_busy = false;
+                            let outcome = generation.map(|g| (g, result.as_ref().err().cloned()));
                             self.protection_known = false;
                             self.status_checked = Instant::now() - Duration::from_secs(10);
                             if result.is_err() {
@@ -815,6 +842,9 @@ impl Wave {
                                     self.log(Level::Error, e);
                                 }
                             }
+                            if let Some((generation, error)) = outcome {
+                                self.exemptions_outcome(generation, error.as_ref());
+                            }
                         }
                     }
                 }
@@ -828,7 +858,11 @@ impl Wave {
                 if self.window.is_none() && !self.tray.as_ref().is_some_and(|t| t.visible()) {
                     return self.update(Message::Show);
                 }
-                if self.exemptions_pending && self.control.is_none() && !self.network_busy {
+                if self.exemptions_pending
+                    && self.control.is_none()
+                    && !self.network_busy
+                    && self.exemptions_retry_at.is_none_or(|t| Instant::now() >= t)
+                {
                     self.sync_lock_exemptions();
                 }
                 if self.preview {
@@ -905,9 +939,14 @@ impl Wave {
                 let timeout = self.prefs.options.number("http_timeout");
                 let cancel = self.requests_cancel.clone();
                 let store = self.bootstrap.clone();
+                let pins = self.pins_required();
                 std::thread::spawn(move || {
                     let r = Client::with_timeout(timeout)
-                        .map(|c| c.remembering(store).cancellable(cancel))
+                        .map(|c| {
+                            c.remembering(store)
+                                .cancellable(cancel)
+                                .requiring_pins(pins)
+                        })
                         .and_then(|c| c.login(&login, &password))
                         .map_err(|error| wave_protocol::sign_in_error(&error));
                     password.zeroize();
@@ -967,6 +1006,9 @@ impl Wave {
                     protection: self.protection.clone(),
                     checks: self.checks.clone(),
                     last_failure: self.last_failure,
+                    bootstrap_exceptions: self.bootstrap_exceptions(),
+                    bootstrap_exceptions_pending: self.exemptions_pending
+                        || self.exemptions_sent.is_some(),
                 };
                 self.diagnostics = Some(
                     serde_json::to_string_pretty(&wave_protocol::diagnostics::report(&context))
@@ -1063,7 +1105,10 @@ impl Wave {
                         let tx = self.sender.clone();
                         let options = self.prefs.options.clone();
                         let bootstrap = self.bootstrap.exemptions();
-                        self.applied_exemptions = Some(bootstrap.clone());
+                        // An empty list makes the worker reuse its session
+                        // set, so only a non-empty list can be confirmed.
+                        self.connection_exemptions =
+                            (!bootstrap.is_empty()).then(|| bootstrap.clone());
                         std::thread::spawn(move || {
                             let result = launch_transport(
                                 profile,
@@ -1201,9 +1246,16 @@ impl Wave {
         let Some(targets) = self.latency_targets(rand::random()) else {
             return;
         };
-        let generation = self.latency.begin(Instant::now());
-        // Persist the cooldown now: a restart during the run must not probe again.
-        self.save_latency();
+        // Persist the cooldown now, under the store lock: a restart during the
+        // run, or another app instance, must not probe again.
+        let now = Instant::now();
+        let generation = match &self.latency_store {
+            Some(store) => match store.admit(&mut self.latency, now, |c| c.begin(now)) {
+                Some(generation) => generation,
+                None => return,
+            },
+            None => self.latency.begin(now),
+        };
         let cancel = Arc::new(AtomicBool::new(false));
         self.latency_cancel = cancel.clone();
         let tx = self.sender.clone();
@@ -1280,17 +1332,66 @@ impl Wave {
         }
         let current = self.bootstrap.exemptions();
         if self.applied_exemptions.as_ref() == Some(&current) {
+            self.exemptions_failures = 0;
+            self.exemptions_retry_at = None;
             return;
         }
         // Never prompt for helper installation just to follow a rotation.
         if !self.helper_available() {
             return;
         }
-        if self.control.is_some() || self.network_busy {
+        if self.control.is_some()
+            || self.network_busy
+            || self.exemptions_retry_at.is_some_and(|t| Instant::now() < t)
+        {
             self.exemptions_pending = true;
             return;
         }
         self.privileged("lock-update");
+    }
+    /// Confirm a sent set only on success of the same generation. A failure
+    /// keeps the last confirmed set and schedules one idle retry, backing off
+    /// from 30 s to at most 15 min, never on every tick.
+    fn exemptions_outcome(&mut self, generation: u64, error: Option<&String>) {
+        let Some((_, sent)) = self
+            .exemptions_sent
+            .take_if(|(sent, _)| *sent == generation)
+        else {
+            return;
+        };
+        match error {
+            None => {
+                self.applied_exemptions = Some(sent);
+                self.exemptions_failures = 0;
+                self.exemptions_retry_at = None;
+            }
+            Some(error) => {
+                let delay = (EXEMPTION_RETRY_MIN * 2u32.saturating_pow(self.exemptions_failures))
+                    .min(EXEMPTION_RETRY_MAX);
+                self.exemptions_failures = self.exemptions_failures.saturating_add(1);
+                self.exemptions_retry_at = Some(Instant::now() + delay);
+                self.exemptions_pending = true;
+                if helper_outdated(error) {
+                    self.error = Some(HELPER_OUTDATED.into());
+                }
+            }
+        }
+    }
+    /// Under Network Lock without a tunnel only exempted (pinned) addresses
+    /// are reachable, so hostname endpoints must not fall back to DNS.
+    fn pins_required(&self) -> bool {
+        (self.guarded || self.persistent_lock) && self.since.is_none()
+    }
+    /// Active bootstrap exceptions to show while Network Lock is on: the
+    /// compiled-in definition's and the latest set the helper confirmed.
+    fn bootstrap_exceptions(&self) -> Option<usize> {
+        (self.guarded || self.persistent_lock).then(|| {
+            wave_protocol::firewall::embedded_exemptions()
+                .into_iter()
+                .chain(self.applied_exemptions.iter().flatten().copied())
+                .collect::<BTreeSet<_>>()
+                .len()
+        })
     }
     fn cancel_measurement(&mut self) {
         self.latency_cancel.store(true, Ordering::Relaxed);
@@ -1339,9 +1440,14 @@ impl Wave {
         let timeout = self.prefs.options.number("http_timeout");
         let cancel = self.requests_cancel.clone();
         let store = self.bootstrap.clone();
+        let pins = self.pins_required();
         std::thread::spawn(move || {
             let r = Client::with_timeout(timeout)
-                .map(|c| c.remembering(store).cancellable(cancel))
+                .map(|c| {
+                    c.remembering(store)
+                        .cancellable(cancel)
+                        .requiring_pins(pins)
+                })
                 .and_then(|c| {
                     if with_account {
                         c.login(&login, &password).map(|(a, m)| (Some(a), m))
@@ -1375,6 +1481,12 @@ impl Wave {
             }
             if v["event"] == "protection" {
                 self.network_revision = self.network_revision.wrapping_add(1);
+                // The worker applied the set it was started with.
+                if self.control.is_some() {
+                    if let Some(list) = self.connection_exemptions.take() {
+                        self.applied_exemptions = Some(list);
+                    }
+                }
                 self.protection_known = true;
                 self.guarded = v["enabled"].as_bool().unwrap_or(false);
                 self.protection.enabled = Some(self.guarded);
@@ -1474,21 +1586,24 @@ impl Wave {
             bootstrap: self.bootstrap.exemptions(),
         };
         #[cfg(test)]
-        if self.test_helper.is_some() {
-            self.network_busy = true;
-            if action != "recover" {
-                self.applied_exemptions = Some(input.bootstrap.clone());
-            }
-            self.test_privileged.push((action, input));
-            return;
-        }
-        if self.preview {
+        let hooked = self.test_helper.is_some();
+        #[cfg(not(test))]
+        let hooked = false;
+        if self.preview && !hooked {
             self.error = Some("Privileged actions are disabled in preview mode".into());
             return;
         }
         self.network_busy = true;
-        if action != "recover" {
-            self.applied_exemptions = Some(input.bootstrap.clone());
+        // Recover reuses the helper's own set; the lock actions apply this one.
+        let generation = (action != "recover").then(|| {
+            self.exemptions_generation += 1;
+            self.exemptions_sent = Some((self.exemptions_generation, input.bootstrap.clone()));
+            self.exemptions_generation
+        });
+        #[cfg(test)]
+        if hooked {
+            self.test_privileged.push((action, input));
+            return;
         }
         let tx = self.sender.clone();
         std::thread::spawn(move || {
@@ -1505,14 +1620,27 @@ impl Wave {
                     .unwrap()
                     .write_all(&serde_json::to_vec(&input)?)?;
                 let result = child.wait_with_output()?;
-                anyhow::ensure!(
-                    result.status.success(),
-                    "{}",
-                    String::from_utf8_lossy(&result.stderr)
-                );
+                if !result.status.success() {
+                    // Plain helper lines (e.g. a broker rejection) explain more
+                    // than the client's generic exit message.
+                    let stdout = String::from_utf8_lossy(&result.stdout);
+                    let plain: Vec<&str> = stdout
+                        .lines()
+                        .filter(|l| !l.trim_start().starts_with('{'))
+                        .collect();
+                    anyhow::bail!(
+                        "{}{}",
+                        String::from_utf8_lossy(&result.stderr).trim(),
+                        if plain.is_empty() {
+                            String::new()
+                        } else {
+                            format!(": {}", plain.join("; "))
+                        }
+                    );
+                }
                 Ok(String::from_utf8_lossy(&result.stdout).into_owned())
             })();
-            let _ = tx.send(Event::Notice(r.map_err(|e| e.to_string())));
+            let _ = tx.send(Event::Notice(generation, r.map_err(|e| e.to_string())));
         });
     }
     fn subscription(&self) -> Subscription<Message> {
@@ -1558,6 +1686,20 @@ impl Drop for Wave {
     }
 }
 const KEEPING_SERVERS: &str = "Keeping the current server list";
+const EXEMPTION_RETRY_MIN: Duration = Duration::from_secs(30);
+const EXEMPTION_RETRY_MAX: Duration = Duration::from_secs(15 * 60);
+const HELPER_OUTDATED: &str = "Network Lock could not follow AirVPN's updated bootstrap addresses. The installed networking helper may be older than this app: reinstall it with the installer (sudo bash scripts/install.sh install), then reopen Wave VPN. Wave retries automatically.";
+/// Rejections an older helper gives for the newer lock input or action.
+fn helper_outdated(error: &str) -> bool {
+    [
+        "Unsupported service action",
+        "Unknown lock action",
+        "unknown field",
+        "rejected or could not complete",
+    ]
+    .iter()
+    .any(|needle| error.contains(needle))
+}
 fn launch_transport(
     profile: TunnelProfile,
     options: Options,

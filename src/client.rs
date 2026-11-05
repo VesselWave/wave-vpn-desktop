@@ -125,6 +125,10 @@ pub struct Client<T: Transport = Http> {
     configurations: Vec<Bootstrap>,
     store: Option<BootstrapStore>,
     resolved: bootstrap::Resolved,
+    /// The stored latest configuration, whose exemption selection defines the
+    /// only addresses a hostname may be pinned to.
+    pin_source: Option<Bootstrap>,
+    require_pins: bool,
     cancel: Option<Arc<AtomicBool>>,
     pause: Pause,
     lookup: Lookup,
@@ -144,6 +148,8 @@ impl<T: Transport> Client<T> {
             configurations: bootstrap::candidates(None),
             store: None,
             resolved: bootstrap::Resolved::new(),
+            pin_source: None,
+            require_pins: false,
             cancel: None,
             pause: Box::new(std::thread::sleep),
             lookup: Box::new(bootstrap::system_lookup),
@@ -152,7 +158,8 @@ impl<T: Transport> Client<T> {
     /// Use the latest stored manifest bootstrap first and store each newer one.
     pub fn remembering(mut self, store: BootstrapStore) -> Self {
         let latest = store.latest();
-        self.configurations = bootstrap::candidates(latest.bootstrap);
+        self.configurations = bootstrap::candidates(latest.bootstrap.clone());
+        self.pin_source = latest.bootstrap;
         self.resolved = latest.resolved;
         self.store = Some(store);
         self
@@ -164,6 +171,13 @@ impl<T: Transport> Client<T> {
         lookup: impl Fn(&str) -> Option<Vec<IpAddr>> + Send + Sync + 'static,
     ) -> Self {
         self.lookup = Box::new(lookup);
+        self
+    }
+    /// Under Network Lock outside the tunnel only pinned (exempted) addresses
+    /// are reachable: never fall back to ordinary DNS for a hostname endpoint
+    /// without a pin; skip it instead.
+    pub fn requiring_pins(mut self, require: bool) -> Self {
+        self.require_pins = require;
         self
     }
     /// Stop between failover attempts once the flag is set.
@@ -198,14 +212,23 @@ impl<T: Transport> Client<T> {
             ("arch".into(), std::env::consts::ARCH.into()),
             ("version".into(), "295".into()),
         ]);
-        for (attempt, (index, url)) in bootstrap::attempts(&self.configurations)
-            .into_iter()
-            .enumerate()
-        {
+        let mut attempt = 0;
+        for (index, url) in bootstrap::attempts(&self.configurations) {
             if self.cancelled() {
                 return Err(Cancelled.into());
             }
+            let Ok(parsed) = bootstrap::endpoint(&url) else {
+                continue;
+            };
+            let pins = self
+                .pin_source
+                .as_ref()
+                .and_then(|b| b.pinned(&parsed, &self.resolved));
+            if pins.is_none() && self.require_pins && bootstrap::is_hostname(&parsed) {
+                continue;
+            }
             let delay = bootstrap::failover_delay(attempt);
+            attempt += 1;
             if !delay.is_zero() {
                 (self.pause)(delay);
                 if self.cancelled() {
@@ -213,11 +236,10 @@ impl<T: Transport> Client<T> {
                 }
             }
             let result = (|| -> Result<String> {
-                let parsed = bootstrap::endpoint(&url)?;
                 let mut envelope = Envelope::new(&self.configurations[index])?;
                 let form = envelope.encode(&parameters)?;
-                let bytes = match bootstrap::pinned(&parsed, &self.resolved) {
-                    Some(addresses) => self.transport.post_pinned(&parsed, &addresses, &form)?,
+                let bytes = match &pins {
+                    Some(addresses) => self.transport.post_pinned(&parsed, addresses, &form)?,
                     None => self.transport.post(&parsed, &form)?,
                 };
                 anyhow::ensure!(bytes.len() <= MAX_DOCUMENT, "AirVPN response too large");
@@ -254,7 +276,7 @@ impl<T: Transport> Client<T> {
     /// Store the manifest's bootstrap, fenced by cancellation and by manifest
     /// time. Only cancellation fails the request; other storage errors are
     /// best effort, so a read-only config directory does not fail sign-in.
-    fn remember(&self, manifest: &Manifest) -> Result<()> {
+    fn remember(&self, manifest: &Manifest, base: u64) -> Result<()> {
         let (Some(store), Some(latest)) = (&self.store, &manifest.bootstrap) else {
             return Ok(());
         };
@@ -262,16 +284,23 @@ impl<T: Transport> Client<T> {
             return Err(Cancelled.into());
         }
         let previous = store.latest().resolved;
-        let resolved = bootstrap::resolve_hosts(latest, &previous, &*self.lookup);
-        match store.save_fenced(latest, manifest.issued, &resolved, &|| !self.cancelled()) {
+        let start = std::time::Instant::now();
+        let resolved = bootstrap::resolve_hosts_bounded(latest, &previous, &*self.lookup, &|| {
+            !self.cancelled() && start.elapsed() < bootstrap::RESOLVE_BUDGET
+        });
+        match store.save_fenced(latest, manifest.issued, &resolved, base, &|| {
+            !self.cancelled()
+        }) {
             Err(e) if e.is::<Cancelled>() => Err(e),
             _ => Ok(()),
         }
     }
     /// Server list only: the periodic refresh does not need the account document.
     pub fn manifest(&self, login: &str, password: &str) -> Result<Manifest> {
+        // Captured before the request: a later write by another session wins ties.
+        let base = self.store.as_ref().map_or(0, |s| s.revision());
         let manifest = parse_manifest(&self.request("manifest", login, password)?)?;
-        self.remember(&manifest)?;
+        self.remember(&manifest, base)?;
         Ok(manifest)
     }
     pub fn login(&self, login: &str, password: &str) -> Result<(Account, Manifest)> {

@@ -24,14 +24,21 @@ pub(crate) fn names<'a>(options: &'a Options, key: &str) -> impl Iterator<Item =
 pub fn embedded_exemptions() -> Vec<Exemption> {
     crate::Bootstrap::eddie().exemptions(&Default::default())
 }
-/// `bootstrap` holds the validated IP/port pairs of the latest manifest
-/// bootstrap (`BootstrapStore::exemptions`). Anything unsafe or more than
-/// `MAX_EXEMPTIONS` is refused: no hostname, range, DNS port or LAN address.
+/// `bootstrap` holds IP/port pairs supplied by the authorized desktop user
+/// (`BootstrapStore::exemptions`). The helper checks only that they are
+/// bounded public unicast TCP destinations without DNS ports; it cannot prove
+/// they belong to AirVPN. That user can already turn Network Lock off, so this
+/// grants nothing beyond its own authority, and `client` limits every
+/// bootstrap exemption to sockets owned by that UID (`meta skuid`): other
+/// local users gain no path outside the tunnel. With no known client UID the
+/// supplied pairs are omitted (fail closed) and only the compiled-in
+/// definition's literal addresses remain, as before, for any process.
 pub fn policy(
     options: &Options,
     profile: Option<&TunnelProfile>,
     locked: bool,
     bootstrap: &[Exemption],
+    client: Option<u32>,
 ) -> Result<String> {
     options.validate()?;
     validate_exemptions(bootstrap)?;
@@ -46,15 +53,19 @@ pub fn policy(
             p.port
         ));
     }
-    // Only encrypted-bootstrap IP/port pairs can bypass the tunnel: the latest
-    // validated manifest's and the embedded fallback's, TCP to that port only.
+    // Bootstrap pairs may bypass the tunnel: TCP to that port only, and only
+    // for the authorized client UID when it is known.
+    let supplied = if client.is_some() { bootstrap } else { &[] };
     let exemptions: std::collections::BTreeSet<Exemption> = embedded_exemptions()
         .into_iter()
-        .chain(bootstrap.iter().copied())
+        .chain(supplied.iter().copied())
         .collect();
+    let owner = client
+        .map(|uid| format!("meta skuid {uid} "))
+        .unwrap_or_default();
     for e in exemptions {
         out.push_str(&format!(
-            "{} tcp dport {} accept\n",
+            "{owner}{} tcp dport {} accept\n",
             address(&e.ip.to_string()),
             e.port
         ));

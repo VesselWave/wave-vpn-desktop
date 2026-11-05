@@ -355,6 +355,11 @@ fn overview(app: &Wave) -> Element<'_, Message> {
     } else if app.guarded && !connected {
         center = center.push(text("Internet is blocked by Network Lock. AirVPN sign-in remains allowed. Turn Network Lock off explicitly to restore ordinary internet.").size(12).style(theme::muted));
     }
+    if app.protection_known && app.guarded && !connected {
+        if let Some(text_) = bootstrap_exceptions_text(app) {
+            center = center.push(text(text_).size(12).style(theme::muted));
+        }
+    }
     if connected {
         let cell = |label: &'static str, val: String| {
             column![
@@ -1157,6 +1162,9 @@ fn settings(app: &Wave) -> Element<'_, Message> {
     }
     if app.section == Section::Lock {
         body = body.push(text(if app.persistent_lock { "Boot-persistent Network Lock is enabled." } else { "Session Network Lock survives app exit, but does not survive reboot. The networking helper does not enable boot protection." }).size(12).style(theme::muted));
+        if let Some(text_) = bootstrap_exceptions_text(app) {
+            body = body.push(text(text_).size(12).style(theme::muted));
+        }
         let available = !app.network_busy
             && !app.preview
             && app
@@ -1224,4 +1232,16 @@ fn diagnostics(app: &Wave) -> Element<'_, Message> {
         text_input("New report filename", &app.diagnostics_path).on_input(Message::DiagnosticsPath).size(13),
         row![link("Copy report", Message::DiagnosticsCopy), link("Save report", Message::DiagnosticsSave)].spacing(12),
     ].spacing(12).height(Fill).into()
+}
+
+/// The active Network Lock bootstrap exceptions, stated without overclaiming:
+/// the helper bounds them but cannot prove they belong to AirVPN.
+fn bootstrap_exceptions_text(app: &Wave) -> Option<String> {
+    let count = app.bootstrap_exceptions()?;
+    let pending = app.exemptions_pending || app.exemptions_sent.is_some();
+    Some(format!(
+        "Bootstrap exceptions: {count} AirVPN sign-in address{} reachable outside the tunnel over TCP, only by apps running as you. The networking helper limits them to public addresses but cannot verify they belong to AirVPN.{}",
+        if count == 1 { " is" } else { "es are" },
+        if pending { " A newer set is waiting to be applied." } else { "" }
+    ))
 }

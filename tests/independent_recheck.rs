@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Independent synthetic recheck. `observed_*` cases characterize review
-//! findings, not desired security contracts. See docs/STAFF-REGRESSION-RECHECK.md.
+//! Independent synthetic recheck of findings F1-F5, now asserting the intended
+//! invariants. See docs/STAFF-REGRESSION-RECHECK.md.
 use wave_protocol::{
     bootstrap::{self, Exemption, Resolved, Saved},
     firewall,
@@ -15,37 +15,97 @@ fn configuration(url: &str) -> Bootstrap {
     b
 }
 
+/// F1: supplied pairs are scoped to the authorized client UID; with no
+/// known UID they are not installed at all. The helper still cannot prove
+/// provider provenance (documented boundary), so only scope is asserted.
 #[test]
-fn observed_helper_accepts_caller_chosen_public_egress_without_provider_proof() {
+fn recheck_supplied_exemptions_are_limited_to_the_client_uid() {
     let input =
         LockInput::parse(br#"{"options":{},"bootstrap":[{"ip":"1.1.1.1","port":443}]}"#).unwrap();
     let mut options = input.options;
     options.set("allow_lan", "false".into());
-    let rules = firewall::policy(&options, None, true, &input.bootstrap).unwrap();
+    let rules = firewall::policy(&options, None, true, &input.bootstrap, Some(1000)).unwrap();
     assert!(rules.contains("policy drop"));
-    assert!(rules.contains("ip daddr 1.1.1.1 tcp dport 443 accept"));
-    // It applies to every process, protocol payload and HTTP path at this pair.
-    assert!(!rules.contains("meta skuid"));
+    assert!(rules.contains("meta skuid 1000 ip daddr 1.1.1.1 tcp dport 443 accept"));
+    // Every bootstrap accept rule carries the owner match.
+    for line in rules
+        .lines()
+        .filter(|l| l.contains("tcp dport") && l.ends_with("accept"))
+    {
+        assert!(line.starts_with("meta skuid 1000 "), "unscoped: {line}");
+    }
+    let unknown = firewall::policy(&options, None, true, &input.bootstrap, None).unwrap();
+    assert!(
+        !unknown.contains("1.1.1.1"),
+        "no UID: supplied pairs omitted"
+    );
+    assert!(
+        unknown.contains("63.33.78.166"),
+        "compiled-in fallback kept"
+    );
 }
 
+/// F5: non-public IPv6 (and IPv4) categories, including transition and
+/// translation forms, never validate or reach the policy.
 #[test]
-fn observed_non_public_ipv6_categories_are_accepted() {
-    for ip in ["fec0::1", "100::1"] {
+fn recheck_non_public_addresses_are_refused() {
+    for ip in [
+        "fec0::1",
+        "100::1",
+        "64:ff9b::808:808",
+        "64:ff9b:1::1",
+        "2002:808:808::1",
+        "2001::1",
+        "2001:2::1",
+        "2001:20::1",
+        "2001:db8::1",
+        "3fff::1",
+        "::ffff:8.8.8.8",
+        "::8.8.8.8",
+        "fc00::1",
+        "fe80::1",
+        "ff02::1",
+        "::1",
+        "::",
+        "4000::1",
+        "192.0.0.9",
+        "192.0.2.1",
+        "192.88.99.1",
+        "198.18.0.1",
+        "198.51.100.1",
+        "203.0.113.1",
+        "100.64.0.1",
+        "240.0.0.1",
+        "255.255.255.255",
+        "0.1.2.3",
+    ] {
         let exemption = Exemption {
             ip: ip.parse().unwrap(),
             port: 443,
         };
-        exemption.validate().unwrap();
+        assert!(exemption.validate().is_err(), "{ip} accepted");
         assert!(
-            firewall::policy(&Options::default(), None, true, &[exemption])
-                .unwrap()
-                .contains(&format!("ip6 daddr {ip} tcp dport 443 accept"))
+            firewall::policy(&Options::default(), None, true, &[exemption], Some(1000)).is_err()
+        );
+    }
+    for ip in [
+        "8.8.8.8",
+        "1.1.1.1",
+        "2a03:b0c0:0:1010::9b:c001",
+        "2606:4700::1111",
+        "2001:200::1",
+    ] {
+        assert!(
+            bootstrap::public_unicast(ip.parse().unwrap()),
+            "{ip} refused"
         );
     }
 }
 
+/// F2: one global selection. Every pinned client address is in the helper's
+/// exemption set, and every hostname keeps at least one address in budget.
 #[test]
-fn observed_hostname_pins_exceed_the_actual_firewall_exemption_set() {
+fn recheck_hostname_pins_are_a_subset_of_the_exemption_set() {
     let mut b = configuration("https://bootstrap0.example:4443");
     b.urls = (0..5)
         .map(|n| format!("https://bootstrap{n}.example:4443"))
@@ -68,32 +128,102 @@ fn observed_hostname_pins_exceed_the_actual_firewall_exemption_set() {
     });
     let exemptions = b.exemptions(&resolved);
     assert_eq!(exemptions.len(), bootstrap::MAX_EXEMPTIONS);
-    let url = bootstrap::endpoint(b.urls.last().unwrap()).unwrap();
-    let pins = bootstrap::pinned(&url, &resolved).unwrap();
-    assert_eq!(pins.len(), 4);
-    assert!(pins.iter().all(|s| !exemptions.contains(&Exemption {
-        ip: s.ip(),
-        port: s.port()
-    })));
+    let stored: usize = resolved.values().map(Vec::len).sum();
+    assert_eq!(
+        stored,
+        bootstrap::MAX_EXEMPTIONS,
+        "only budgeted addresses are kept"
+    );
+    for url in &b.urls {
+        let url = bootstrap::endpoint(url).unwrap();
+        let pins = b.pinned(&url, &resolved).expect("every host keeps a pin");
+        assert!(pins.len() >= 3);
+        assert!(pins.iter().all(|s| exemptions.contains(&Exemption {
+            ip: s.ip(),
+            port: s.port()
+        })));
+    }
+    // An oversized previously stored map is still filtered to the selection.
+    let mut oversized = resolved.clone();
+    oversized.insert(
+        "bootstrap4.example".into(),
+        (1..=4)
+            .map(|i| format!("9.9.9.{i}").parse().unwrap())
+            .collect(),
+    );
+    let allowed = b.exemptions(&oversized);
+    let url = bootstrap::endpoint(&b.urls[4]).unwrap();
+    for pin in b.pinned(&url, &oversized).unwrap() {
+        assert!(allowed.contains(&Exemption {
+            ip: pin.ip(),
+            port: pin.port()
+        }));
+    }
 }
 
+/// F4: a late equal/unknown-time write from a session that started before a
+/// later write is refused; the session that saw the current revision may
+/// still re-resolve hostnames; a strictly newer time always wins.
 #[test]
-fn observed_equal_or_unknown_manifest_time_allows_late_replacement() {
+fn recheck_equal_or_unknown_manifest_time_is_fenced_by_revision() {
     for issued in [0, 1_000] {
         let dir = tempfile::tempdir().unwrap();
         let store = BootstrapStore::in_directory(dir.path());
+        let old_base = store.revision();
+        let new_base = store.revision();
         let newer_session = configuration("https://8.8.8.8");
         let late_old_session = configuration("https://1.1.1.1");
-        store
-            .save_fenced(&newer_session, issued, &Resolved::new(), &|| true)
-            .unwrap();
         assert_eq!(
             store
-                .save_fenced(&late_old_session, issued, &Resolved::new(), &|| true)
+                .save_fenced(&newer_session, issued, &Resolved::new(), new_base, &|| true)
                 .unwrap(),
             Saved::Written
         );
-        assert_eq!(store.load(), Some(late_old_session));
+        assert_eq!(
+            store
+                .save_fenced(
+                    &late_old_session,
+                    issued,
+                    &Resolved::new(),
+                    old_base,
+                    &|| true
+                )
+                .unwrap(),
+            Saved::Stale
+        );
+        assert_eq!(store.load(), Some(newer_session.clone()));
+        // Re-resolution of the same manifest by a current session is allowed.
+        let mut host = configuration("https://boot.example");
+        host.urls.push("https://8.8.8.8".into());
+        let base = store.revision();
+        let first: Resolved =
+            [("boot.example".to_owned(), vec!["8.8.4.4".parse().unwrap()])].into();
+        store
+            .save_fenced(&host, issued, &first, base, &|| true)
+            .unwrap();
+        let base = store.revision();
+        let second: Resolved =
+            [("boot.example".to_owned(), vec!["8.8.4.5".parse().unwrap()])].into();
+        assert_eq!(
+            store
+                .save_fenced(&host, issued, &second, base, &|| true)
+                .unwrap(),
+            Saved::Written
+        );
+        assert_eq!(store.latest().resolved, second);
+        // A strictly newer manifest time wins even from an old base.
+        assert_eq!(
+            store
+                .save_fenced(
+                    &late_old_session,
+                    issued + 1,
+                    &Resolved::new(),
+                    old_base,
+                    &|| true
+                )
+                .unwrap(),
+            Saved::Written
+        );
     }
 }
 
@@ -150,6 +280,7 @@ fn recheck_process_writer_entry() {
             &configuration(&format!("https://8.8.8.{}", issued - 99)),
             issued,
             &Resolved::new(),
+            0,
             &|| true,
         )
         .unwrap();

@@ -15,6 +15,18 @@ pub fn available() -> bool {
         false
     }
 }
+/// The desktop UID authorized at service installation, from the root-only
+/// service configuration. Network Lock limits bootstrap exemptions to it.
+pub fn authorized_uid() -> Option<u32> {
+    #[cfg(target_os = "linux")]
+    {
+        linux::authorized_uid()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
+}
 pub fn command(executable: &Path, action: &str) -> Result<Command> {
     command_cancellable(executable, action, || false)
 }
@@ -128,6 +140,9 @@ mod linux {
         let mut bytes = Vec::new();
         file.take(1025).read_to_end(&mut bytes)?;
         Ok(serde_json::from_slice(&bytes)?)
+    }
+    pub(super) fn authorized_uid() -> Option<u32> {
+        config().ok().map(|c| c.uid).filter(|uid| *uid > 0)
     }
     fn atomic(path: &str, bytes: &[u8], mode: u32) -> Result<()> {
         let path = Path::new(path);

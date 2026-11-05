@@ -24,6 +24,13 @@ pub struct Context {
     pub protection: crate::protection::Status,
     pub checks: crate::checks::Results,
     pub last_failure: Failure,
+    /// Destinations (count only) Network Lock lets the authorized user's
+    /// processes reach outside the tunnel over TCP for AirVPN sign-in.
+    #[serde(default)]
+    pub bootstrap_exceptions: Option<usize>,
+    /// A newer bootstrap set is not yet confirmed by the helper.
+    #[serde(default)]
+    pub bootstrap_exceptions_pending: bool,
 }
 fn available(name: &str) -> bool {
     ["/usr/sbin", "/usr/bin", "/sbin", "/bin"]

@@ -181,3 +181,11 @@ bootstrap, fenced bootstrap persistence and per-location latency sampling were
 designed and written for this repository. The manifest `time` attribute is the
 same pinned Eddie manifest schema. The `socket2` crate (MIT OR Apache-2.0)
 provides the non-blocking probe socket. No new external reference was used.
+
+Repair round 2 ([STAFF-REGRESSION-RECHECK.md](STAFF-REGRESSION-RECHECK.md)):
+the public-unicast predicate encodes address facts from the IANA IPv4 and IPv6
+Special-Purpose Address Registries (RFC 6890 and successors, including RFC 9637
+for 3fff::/20) and the IANA IPv6 global unicast allocation (2000::/3). These are
+public registry facts, not code. Revision fencing, the shared exemption
+selection, UID-scoped rules (the nftables `meta skuid` expression) and retry
+handling were written for this repository. No upstream code copied.

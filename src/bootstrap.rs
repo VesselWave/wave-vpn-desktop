@@ -25,6 +25,9 @@ const MAX_STORED: u64 = 64 * 1024;
 const STORE_VERSION: u32 = 2;
 /// Hostname lookups for bootstrap endpoints give up after this long.
 pub const RESOLVE_TIMEOUT: Duration = Duration::from_secs(3);
+/// No new hostname lookup starts after this much time adopting one manifest,
+/// so adoption waits at most this plus one `RESOLVE_TIMEOUT`.
+pub const RESOLVE_BUDGET: Duration = Duration::from_secs(6);
 /// A stored manifest time further ahead of the clock than this is ignored, so
 /// a wrong clock cannot freeze bootstrap updates forever.
 const MAX_CLOCK_SKEW: u64 = 7 * 24 * 3600;
@@ -52,30 +55,52 @@ impl Exemption {
         Ok(())
     }
 }
-/// Rejects addresses that are not plausible public bootstrap servers.
+/// Globally routable public unicast only, conservatively: IPv4 outside every
+/// special-purpose block (RFC 6890 registry: private, shared, loopback,
+/// link-local, protocol assignments, documentation, benchmarking, 6to4 relay,
+/// multicast, reserved, broadcast); IPv6 only inside 2000::/3 and outside
+/// 2001::/23 (Teredo, ORCHID, benchmarking), 2001:db8::/32 and 3fff::/20
+/// (documentation) and 2002::/16 (6to4). Transition and translation forms
+/// (IPv4-mapped/compatible, NAT64 64:ff9b::/96 and /48, 6to4, Teredo) are
+/// refused rather than judged by the IPv4 address they carry; site-local
+/// fec0::/10, discard 100::/64, ULA, link-local and multicast fall outside 2000::/3.
 pub fn public_unicast(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(a) => {
-            let o = a.octets();
-            !(a.is_unspecified()
-                || a.is_loopback()
-                || a.is_private()
-                || a.is_link_local()
-                || a.is_multicast()
-                || a.is_broadcast()
-                || o[0] == 0
-                || o[0] >= 240
-                || (o[0] == 100 && (o[1] & 0xc0) == 64))
+            let n = u32::from(a);
+            const BLOCKED: [(u32, u32); 15] = [
+                (0x0000_0000, 8),
+                (0x0a00_0000, 8),
+                (0x6440_0000, 10),
+                (0x7f00_0000, 8),
+                (0xa9fe_0000, 16),
+                (0xac10_0000, 12),
+                (0xc000_0000, 24),
+                (0xc000_0200, 24),
+                (0xc058_6300, 24),
+                (0xc0a8_0000, 16),
+                (0xc612_0000, 15),
+                (0xc633_6400, 24),
+                (0xcb00_7100, 24),
+                (0xe000_0000, 4),
+                (0xf000_0000, 4),
+            ];
+            !BLOCKED
+                .iter()
+                .any(|(net, len)| n >> (32 - len) == net >> (32 - len))
         }
         IpAddr::V6(a) => {
-            let first = a.segments()[0];
-            !(a.is_unspecified()
-                || a.is_loopback()
-                || a.is_multicast()
-                || (first & 0xfe00) == 0xfc00
-                || (first & 0xffc0) == 0xfe80
-                || a.to_ipv4_mapped().is_some()
-                || a.to_ipv4().is_some_and(|_| a.segments()[..6] == [0; 6]))
+            let n = u128::from(a);
+            let within = |net: u128, len: u32| n >> (128 - len) == net >> (128 - len);
+            within(0x2000 << 112, 3)
+                && ![
+                    (0x2001u128 << 112, 23),
+                    (0x2001_0db8u128 << 96, 32),
+                    (0x2002u128 << 112, 16),
+                    (0x3fffu128 << 112, 20),
+                ]
+                .iter()
+                .any(|(net, len)| within(*net, *len))
         }
     }
 }
@@ -148,6 +173,18 @@ pub fn resolve_hosts(
     previous: &Resolved,
     lookup: &dyn Fn(&str) -> Option<Vec<IpAddr>>,
 ) -> Resolved {
+    resolve_hosts_bounded(bootstrap, previous, lookup, &|| true)
+}
+/// As `resolve_hosts`, but no new lookup starts once `keep_going` is false
+/// (cancelled or out of the total time budget); remaining hosts keep their
+/// previous addresses. The result is trimmed to the addresses that fit the
+/// shared exemption budget, so every pinned address is also exempted.
+pub fn resolve_hosts_bounded(
+    bootstrap: &Bootstrap,
+    previous: &Resolved,
+    lookup: &dyn Fn(&str) -> Option<Vec<IpAddr>>,
+    keep_going: &dyn Fn() -> bool,
+) -> Resolved {
     let mut out = Resolved::new();
     for url in &bootstrap.urls {
         let Ok(parsed) = endpoint(url) else { continue };
@@ -157,7 +194,8 @@ pub fn resolve_hosts(
         if out.contains_key(&name) || !valid_hostname(&name) {
             continue;
         }
-        let mut addresses: Vec<IpAddr> = lookup(&name)
+        let looked_up = if keep_going() { lookup(&name) } else { None };
+        let mut addresses: Vec<IpAddr> = looked_up
             .unwrap_or_default()
             .into_iter()
             .filter(|ip| public_unicast(*ip))
@@ -170,10 +208,16 @@ pub fn resolve_hosts(
                 addresses = kept.clone();
             }
         }
+        addresses.retain(|ip| public_unicast(*ip));
         if !addresses.is_empty() {
             out.insert(name, addresses);
         }
     }
+    let allowed = bootstrap.exemptions(&out);
+    out.retain(|_, addresses| {
+        addresses.retain(|ip| allowed.iter().any(|e| e.ip == *ip));
+        !addresses.is_empty()
+    });
     out
 }
 /// The system resolver, bounded by `RESOLVE_TIMEOUT` (a lookup that never
@@ -242,46 +286,74 @@ impl Bootstrap {
 }
 
 impl Bootstrap {
-    /// IP/port pairs Network Lock must allow for this configuration: literal
-    /// addresses as listed, hostnames only through `resolved`. Invalid or
-    /// unsafe entries are skipped (fail closed); at most `MAX_EXEMPTIONS`.
+    /// The one bounded IP/port selection shared by the helper's Network Lock
+    /// policy and the client's hostname pinning: literal addresses in listed
+    /// order, then resolved hostname addresses round-robin (each host's first
+    /// address, then each host's second, ...), so every host keeps addresses
+    /// within `MAX_EXEMPTIONS`. Invalid or unsafe entries are skipped.
     pub fn exemptions(&self, resolved: &Resolved) -> Vec<Exemption> {
         let mut out: Vec<Exemption> = Vec::new();
+        let push = |out: &mut Vec<Exemption>, exemption: Exemption| {
+            if out.len() < MAX_EXEMPTIONS
+                && exemption.validate().is_ok()
+                && !out.contains(&exemption)
+            {
+                out.push(exemption);
+            }
+        };
+        let mut hosts: Vec<(&[IpAddr], u16)> = Vec::new();
         for url in &self.urls {
             let Ok(parsed) = endpoint(url) else { continue };
             let Some(port) = parsed.port_or_known_default() else {
                 continue;
             };
-            let addresses = match host(&parsed) {
-                Some(Ok(ip)) => vec![ip],
-                Some(Err(name)) => resolved.get(&name).cloned().unwrap_or_default(),
-                None => vec![],
-            };
-            for ip in addresses {
-                let exemption = Exemption { ip, port };
-                if exemption.validate().is_ok() && !out.contains(&exemption) {
-                    out.push(exemption);
+            match host(&parsed) {
+                Some(Ok(ip)) => push(&mut out, Exemption { ip, port }),
+                Some(Err(name)) => {
+                    if let Some(addresses) = resolved.get(&name) {
+                        hosts.push((addresses, port));
+                    }
+                }
+                None => (),
+            }
+        }
+        for round in 0..MAX_ADDRESSES_PER_HOST {
+            for (addresses, port) in &hosts {
+                if let Some(ip) = addresses.get(round) {
+                    push(
+                        &mut out,
+                        Exemption {
+                            ip: *ip,
+                            port: *port,
+                        },
+                    );
                 }
             }
         }
-        out.truncate(MAX_EXEMPTIONS);
         out
+    }
+    /// Socket addresses a hostname endpoint is pinned to: only resolved
+    /// addresses inside this configuration's exemption selection. None for a
+    /// literal address or a hostname without such an address.
+    pub fn pinned(&self, url: &reqwest::Url, resolved: &Resolved) -> Option<Vec<SocketAddr>> {
+        let Some(Err(name)) = host(url) else {
+            return None;
+        };
+        let port = url.port_or_known_default()?;
+        let allowed = self.exemptions(resolved);
+        let pins: Vec<SocketAddr> = resolved
+            .get(&name)?
+            .iter()
+            .filter(|ip| allowed.contains(&Exemption { ip: **ip, port }))
+            .map(|ip| SocketAddr::new(*ip, port))
+            .collect();
+        (!pins.is_empty()).then_some(pins)
     }
 }
 
-/// Socket addresses a hostname endpoint is pinned to, if it was resolved.
-pub fn pinned(url: &reqwest::Url, resolved: &Resolved) -> Option<Vec<SocketAddr>> {
-    let Some(Err(name)) = host(url) else {
-        return None;
-    };
-    let port = url.port_or_known_default()?;
-    let addresses = resolved.get(&name)?;
-    Some(
-        addresses
-            .iter()
-            .map(|ip| SocketAddr::new(*ip, port))
-            .collect(),
-    )
+/// Whether an endpoint names a host (needs DNS or a pin) rather than an address.
+pub fn is_hostname(url: &reqwest::Url) -> bool {
+    matches!(host(url), Some(Err(_)))
 }
 
 /// Parse one bootstrap address; credentials, queries and fragments are refused.
@@ -355,6 +427,10 @@ struct Stored {
     bootstrap: Bootstrap,
     #[serde(default)]
     resolved: Resolved,
+    /// Incremented by every write. A session captures it before its request
+    /// and may replace an equal-time configuration only if it is unchanged.
+    #[serde(default)]
+    revision: u64,
 }
 
 /// The stored latest bootstrap with its manifest time and resolved hostnames.
@@ -363,6 +439,8 @@ pub struct Latest {
     pub bootstrap: Option<Bootstrap>,
     pub issued: u64,
     pub resolved: Resolved,
+    /// Store revision; pass it to `save_fenced` as the session's base.
+    pub revision: u64,
 }
 
 /// What a fenced save did.
@@ -443,6 +521,7 @@ impl BootstrapStore {
                 bootstrap: Some(s.bootstrap),
                 issued: effective(s.issued),
                 resolved: s.resolved,
+                revision: s.revision,
             })
             .unwrap_or_default()
     }
@@ -455,22 +534,45 @@ impl BootstrapStore {
             .map(|b| b.exemptions(&latest.resolved))
             .unwrap_or_default()
     }
+    /// The current revision, to capture before a request (0 when none).
+    pub fn revision(&self) -> u64 {
+        self.read().map_or(0, |s| s.revision)
+    }
     /// Validate, then replace atomically unless a newer manifest's bootstrap
-    /// is stored. Unchanged data is not rewritten.
+    /// is stored. Unchanged data is not rewritten. Not session-fenced: for
+    /// explicit local writes, never for a network response.
     pub fn save(&self, bootstrap: &Bootstrap) -> Result<()> {
-        self.save_fenced(bootstrap, 0, &Resolved::new(), &|| true)
+        self.write(bootstrap, 0, &Resolved::new(), None, &|| true)
             .map(|_| ())
     }
     /// `current` is checked while holding this process's persistence lock and
     /// an exclusive lock on the store, immediately before writing; when it is
-    /// false the write is refused with `Cancelled`. A bootstrap from a manifest
-    /// older than the stored one is never written (`Saved::Stale`), so an old
-    /// session or a concurrent process cannot roll the store back.
+    /// false the write is refused with `Cancelled`. Ordering, decided under
+    /// the file lock (`Saved::Stale` writes nothing):
+    /// * an older manifest time than the stored one never replaces it;
+    /// * a strictly newer known time always does;
+    /// * an equal time, including both unknown (0), replaces it only if the
+    ///   store is still at `base`, the revision this session captured before
+    ///   its request. A late response from a session that started before
+    ///   another write, in this or any process, cannot replace that write,
+    ///   while a session that saw the current state may still re-resolve its
+    ///   hostnames for the same manifest.
     pub fn save_fenced(
         &self,
         bootstrap: &Bootstrap,
         issued: u64,
         resolved: &Resolved,
+        base: u64,
+        current: &dyn Fn() -> bool,
+    ) -> Result<Saved> {
+        self.write(bootstrap, issued, resolved, Some(base), current)
+    }
+    fn write(
+        &self,
+        bootstrap: &Bootstrap,
+        issued: u64,
+        resolved: &Resolved,
+        base: Option<u64>,
         current: &dyn Fn() -> bool,
     ) -> Result<Saved> {
         bootstrap.validate()?;
@@ -495,17 +597,22 @@ impl BootstrapStore {
         if !current() {
             return Err(crate::client::Cancelled.into());
         }
-        if let Some(stored) = self.read() {
+        let stored = self.read();
+        let mut revision = base.unwrap_or(0);
+        if let Some(stored) = &stored {
             let stored_issued = effective(stored.issued);
             if stored_issued > issued {
                 return Ok(Saved::Stale);
             }
-            if stored_issued == issued
-                && stored.bootstrap == *bootstrap
-                && stored.resolved == *resolved
-            {
-                return Ok(Saved::Unchanged);
+            if stored_issued == issued {
+                if stored.bootstrap == *bootstrap && stored.resolved == *resolved {
+                    return Ok(Saved::Unchanged);
+                }
+                if base.is_some_and(|base| base != stored.revision) {
+                    return Ok(Saved::Stale);
+                }
             }
+            revision = revision.max(stored.revision);
         }
         let mut temp = tempfile::NamedTempFile::new_in(directory)?;
         temp.write_all(&serde_json::to_vec_pretty(&Stored {
@@ -513,6 +620,7 @@ impl BootstrapStore {
             issued,
             bootstrap: bootstrap.clone(),
             resolved: resolved.clone(),
+            revision: revision.wrapping_add(1),
         })?)?;
         temp.as_file().sync_all()?;
         temp.persist(&self.path)
@@ -522,9 +630,9 @@ impl BootstrapStore {
 }
 
 /// An advisory lock shared by every process writing the same store.
-struct FileLock(#[allow(dead_code)] std::fs::File);
+pub(crate) struct FileLock(#[allow(dead_code)] std::fs::File);
 impl FileLock {
-    fn exclusive(path: &Path) -> Result<Self> {
+    pub(crate) fn exclusive(path: &Path) -> Result<Self> {
         let mut options = std::fs::OpenOptions::new();
         options.create(true).truncate(false).read(true).write(true);
         #[cfg(unix)]
@@ -534,7 +642,7 @@ impl FileLock {
         }
         let file = options
             .open(path)
-            .context("Unable to lock bootstrap configuration")?;
+            .context("Unable to lock configuration file")?;
         #[cfg(unix)]
         {
             use std::os::fd::AsRawFd;
@@ -546,7 +654,7 @@ impl FileLock {
                 let error = std::io::Error::last_os_error();
                 ensure!(
                     error.kind() == std::io::ErrorKind::Interrupted,
-                    "Unable to lock bootstrap configuration: {error}"
+                    "Unable to lock configuration file: {error}"
                 );
             }
         }

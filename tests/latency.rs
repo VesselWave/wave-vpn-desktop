@@ -275,3 +275,30 @@ fn a_day_of_frequent_refreshes_measures_rarely() {
         "{runs} runs; at most one per 30 min while disconnected"
     );
 }
+
+// Two app instances sharing one config directory share one probe budget.
+#[test]
+fn recheck_second_instance_is_not_admitted_during_another_cooldown() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = wave_protocol::latency::LatencyStore::in_directory(dir.path());
+    let second = wave_protocol::latency::LatencyStore::in_directory(dir.path());
+    let now = Instant::now();
+    let wall = 1_000_000;
+    let mut a = LatencyCache::default();
+    let mut b = LatencyCache::default();
+    assert!(first
+        .admit_at(&mut a, now, wall, |c| c.begin(now))
+        .is_some());
+    assert!(second
+        .admit_at(&mut b, now, wall + 10, |_| panic!("must not start"))
+        .is_none());
+    assert!(
+        b.next().is_some_and(|t| t > now),
+        "adopts the running cooldown"
+    );
+    // After the cooldown expires the other instance may run.
+    let later = wall + RETRY_INTERVAL.as_secs() + 1;
+    assert!(second
+        .admit_at(&mut b, now, later, |c| c.begin(now))
+        .is_some());
+}
