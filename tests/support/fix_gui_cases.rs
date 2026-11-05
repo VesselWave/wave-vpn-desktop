@@ -321,3 +321,45 @@ fn fix_no_probes_while_connecting_connected_or_changing_the_lock() {
     app.since = Some(now);
     assert!(!app.latency.due(now, app.probes_blocked()), "connected");
 }
+
+// Independent recheck: passing characterization of the failed update gap.
+#[test]
+fn observed_failed_lock_update_is_marked_applied_and_not_retried() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = app(&dir);
+    app.test_helper = Some(true);
+    app.guarded = true;
+    rotate(&app, "https://8.8.8.8:4443", 100);
+    refreshed(&mut app, false, None);
+    assert_eq!(app.test_privileged.len(), 1);
+    app.sender
+        .send(Event::Notice(Err(
+            "nft: synthetic transaction failure".into()
+        )))
+        .unwrap();
+    let _ = app.update(Message::Tick);
+    assert!(!app.network_busy);
+    assert!(app
+        .error
+        .as_deref()
+        .unwrap()
+        .contains("synthetic transaction failure"));
+    refreshed(&mut app, false, None);
+    assert_eq!(
+        app.test_privileged.len(),
+        1,
+        "failed update is never retried"
+    );
+    assert!(!app.exemptions_pending);
+}
+
+#[test]
+fn recheck_explicit_failed_probe_still_builds_selected_profile() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = app(&dir);
+    let name = app.manifest.as_ref().unwrap().servers[0].name.clone();
+    app.prefs.target = Target::Server(name.clone());
+    app.latency.insert(name.clone(), latency::Ping::Unreachable);
+    assert_eq!(app.selected().unwrap().name, name);
+    app.profile().unwrap();
+}

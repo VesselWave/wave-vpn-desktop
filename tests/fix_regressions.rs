@@ -509,3 +509,40 @@ fn fix_tcp_probe_measures_loopback_and_honours_cancellation() {
     assert!(prober.probe(target, Duration::from_secs(5)).is_none());
     assert!(start.elapsed() < Duration::from_millis(200));
 }
+
+#[test]
+fn recheck_mismatch_is_terminal_at_each_retry_position_even_when_cancel_races() {
+    use std::cell::Cell;
+    for position in 0..3 {
+        for later in [Verdict::Verified, Verdict::Unavailable, Verdict::Stopped] {
+            for cancel_on_failure in [false, true] {
+                let cancelled = Cell::new(false);
+                let mut calls = 0;
+                let mut pauses = 0;
+                let verdict = checks::verify_at_connect(
+                    u64::MAX,
+                    &mut || {
+                        let current = calls;
+                        calls += 1;
+                        if current < position {
+                            Verdict::Unavailable
+                        } else if current == position {
+                            cancelled.set(cancel_on_failure);
+                            Verdict::Failed("independent observed mismatch")
+                        } else {
+                            later
+                        }
+                    },
+                    &mut |_| pauses += 1,
+                    &|| cancelled.get(),
+                );
+                assert!(
+                    verdict.stops_connection(),
+                    "position={position} later={later:?}"
+                );
+                assert_eq!(calls, position + 1);
+                assert_eq!(pauses, position);
+            }
+        }
+    }
+}

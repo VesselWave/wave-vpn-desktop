@@ -90,3 +90,11 @@ New tests: `tests/fix_regressions.rs` (16), `fix_*` cases in `tests/bootstrap.rs
 Validation on macOS ARM64: `cargo test --locked --all-targets` (all pass, 5 pre-existing live/authenticated tests ignored), `cargo clippy --locked --all-targets -- -D warnings`, `cargo build --release --locked --bins`. `cargo clippy --locked --target aarch64-unknown-linux-gnu --all-targets -- -D warnings` passes as a type check only (stub libc headers for `ring`'s build script; nothing linked or executed).
 
 Remaining limitations: Linux helper behaviour (`lock-update`, session/boot exemption files, worker failure event, nft transaction, boot restore) was compiled but not executed. The isolated network suite, reboot, authenticated live suite and GUI timing still need the separate VM gate. Hostname resolution uses the system resolver, so a lock enabled before the first manifest with a new hostname is resolved allows only previously resolved addresses. Location estimates assume co-located servers have similar latency; best-server quality is not assessed here. The 30-minute cooldown uses wall-clock time across restarts and is ignored when the clock moves backwards.
+
+## Independent fix recheck
+
+A later tests/docs-only recheck of `1a53b9e` found additional endpoint-policy,
+rotation-recovery and persistence-ordering gaps. See
+[STAFF-REGRESSION-RECHECK.md](STAFF-REGRESSION-RECHECK.md) for reproductions,
+severity, proposed fixes, mutation evidence and the still-pending Linux VM gate.
+Passing original R1–R4 tests does not imply a clean follow-up assessment.
