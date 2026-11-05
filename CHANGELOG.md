@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.1.3 · 2026-11-05 · early release
 
-Lighter on AirVPN's infrastructure, following AirVPN staff feedback.
+Lighter on AirVPN's infrastructure, following [AirVPN Staff feedback](https://airvpn.org/forums/topic/82017-wave-vpn-open-source-wireguard-client-for-android-and-linux-unofficial-v011/?do=findComment&comment=268064). [Release notes](docs/RELEASE-v0.1.3.md).
 
 **Changed**
 
@@ -28,6 +28,11 @@ Lighter on AirVPN's infrastructure, following AirVPN staff feedback.
 - A late response with the same or an unknown manifest time can no longer replace a configuration saved after its request started, in any process
 - Exceptions refuse every non-public address, including IPv6 site-local, discard-only, documentation, 6to4, Teredo and NAT64 ranges
 - Simultaneous app instances share one latency probe cooldown; adopting a manifest spends at most about 9 s resolving sign-in hostnames
+
+**Also fixed**
+
+- Expired latency measurements are discarded when ranking servers, including after a failed refresh
+- Best remains a latency/load heuristic; throughput and long-term reliability are unverified. [Remediation and runtime evidence](docs/STAFF-REMEDIATION.md)
 
 ## 0.1.2 · 2026-11-05 · early release
 
