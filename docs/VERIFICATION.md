@@ -666,5 +666,22 @@ authenticated live suite now request the lock explicitly instead of relying on
 the default; the full isolated suite passed on the Ubuntu VM with an
 Ubuntu-built debug binary of that change.
 
+**Published v0.1.2 (CI-built, signed):** the first tag run built and signed every
+artifact, but `verify-release.sh` accepted only `.tar.gz` names and stopped the
+workflow before publishing; it now also accepts `.deb`, `.rpm` and
+`.pkg.tar.zst`, and a local signed `release.sh` run with a throwaway key passed.
+The tag, never used by a release, was moved to that fix. The published assets
+verified against fingerprint `414018C0BBB8C0A70A80BF570AA32CCB2C0B3951`; the
+published Arch package reinstalled on the CachyOS laptop (helper refreshed to
+the published binary) and the published `.deb` installed on the Ubuntu VM with
+the helper active and the GUI launching from its desktop entry.
+
+```text
+f05774eb815d9a5d8640dca35636664da12d68fb2b20738219885aed5ba025ab  wave-vpn_0.1.2-1_amd64.deb
+360d96be596492410be649cfc2588d894e86e7a5382a6d5dea48ff58cd917df3  wave-vpn-0.1.2-1.x86_64.rpm
+220632d4e4b908c6e9a76ebc8cb05e0ffc85f671ef2b905c8c05cb53643bcaca  wave-vpn-0.1.2-1-x86_64.pkg.tar.zst
+284778adac15070e38f6edf5985f89bde707c6128b9aad9c27d72faa3effcb29  wave-vpn-0.1.2-x86_64-unknown-linux-gnu.tar.gz
+```
+
 Not covered: GUI connect with these packages, a real Fedora or openSUSE desktop,
-upgrade between two signed package releases, and the final CI-built artifacts.
+and an upgrade between two signed package releases.
