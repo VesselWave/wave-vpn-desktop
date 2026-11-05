@@ -4,7 +4,8 @@
 
 - [User guide](USER-GUIDE.md): signing in, connection checks, Network Lock, Recover, upgrading and uninstalling
 - [Installation and support](SUPPORT.md): tested systems, dependencies, diagnostics
-- [v0.1.1 release notes](RELEASE-v0.1.1.md): what's new in the current release
+- [v0.1.2 release notes](RELEASE-v0.1.2.md): what's new in the current release
+- [v0.1.1 release notes](RELEASE-v0.1.1.md): the interface update
 - [v0.1.0 release notes](RELEASE-v0.1.0.md): the first release and its known limits
 - [Security policy](../SECURITY.md): private reporting and the signing fingerprint
 
