@@ -1685,3 +1685,7 @@ mod safety_tests {
         assert!(wait <= wave_protocol::lifecycle::retry_delay(0).mul_f64(1.2));
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/support/staff_gui_cases.rs"]
+mod staff_gui_cases;

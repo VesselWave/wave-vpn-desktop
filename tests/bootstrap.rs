@@ -466,3 +466,65 @@ fn store_ignores_damaged_files_and_does_not_rewrite_unchanged_data() {
         );
     }
 }
+
+#[test]
+fn staff_cancellation_in_failover_pause_prevents_the_next_post() {
+    let fake = Arc::new(Fake::new(&[]));
+    let cancel = Arc::new(AtomicBool::new(false));
+    let flag = cancel.clone();
+    let error = Client::with_transport(fake.clone())
+        .cancellable(cancel)
+        .pausing(move |_| flag.store(true, Ordering::SeqCst))
+        .manifest("tester", "synthetic")
+        .err()
+        .unwrap();
+    assert!(error.is::<Cancelled>());
+    assert_eq!(fake.calls().len(), 1);
+}
+
+#[test]
+#[ignore = "R4: cancelled successful response still persists manifest bootstrap"]
+fn staff_cancelled_response_must_not_replace_persisted_bootstrap() {
+    let (_dir, store) = store();
+    let previous = config(1, &["http://198.51.100.1"]);
+    store.save(&previous).unwrap();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let flag = cancel.clone();
+    let mut fake = Fake::new(&[("http://198.51.100.1", Endpoint::Up(1))]);
+    fake.next_bootstrap = Some(config(2, &["http://203.0.113.77:8080"]));
+    fake.on_call = Box::new(move |_| flag.store(true, Ordering::SeqCst));
+    let result = Client::with_transport(Arc::new(fake))
+        .remembering(store.clone())
+        .cancellable(cancel)
+        .manifest("tester", "synthetic");
+    // Check disk first: epoch filtering in the GUI cannot undo this write.
+    assert_eq!(store.load(), Some(previous));
+    assert!(result.err().unwrap().is::<Cancelled>());
+}
+
+#[test]
+fn staff_malformed_bootstrap_fields_do_not_destroy_a_usable_server_list() {
+    let good = config(1, &["http://198.51.100.1"]);
+    for invalid in [
+        Bootstrap {
+            urls: vec![],
+            ..good.clone()
+        },
+        Bootstrap {
+            urls: vec!["https://user:secret@203.0.113.1".into()],
+            ..good.clone()
+        },
+        Bootstrap {
+            exponent: "!!!".into(),
+            ..good.clone()
+        },
+        Bootstrap {
+            urls: vec!["http://203.0.113.1".into(); MAX_URLS + 1],
+            ..good.clone()
+        },
+    ] {
+        let manifest = wave_protocol::parse_manifest(&manifest_document(Some(&invalid))).unwrap();
+        assert!(manifest.bootstrap.is_none());
+        assert_eq!(manifest.servers[0].name, "Alpha");
+    }
+}
