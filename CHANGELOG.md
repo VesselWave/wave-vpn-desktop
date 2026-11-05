@@ -13,6 +13,7 @@ Easier installation. [Release notes](docs/RELEASE-v0.1.2.md).
 
 - The tarball is self-contained: `README.txt`, `install.sh` and `LICENSE` on top, the installed files in `files/`. No separate source download needed to install
 - `./install.sh` asks for your password itself, names missing dependencies for apt, dnf, pacman or zypper and offers to install them
+- Network Lock is off by default; turn it on in Settings. Saved choices carry over. An enabled lock blocks the internet even while disconnected, which caught people out on first use
 - Uninstalling disconnects and turns off Network Lock first instead of refusing
 - Connecting from an uninstalled copy says Wave VPN isn't installed yet, instead of failing helper setup
 - Installed documentation keeps the `docs/` folder, so the README and `docs/README.md` no longer overwrite each other

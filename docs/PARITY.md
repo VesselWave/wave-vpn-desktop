@@ -7,7 +7,7 @@ Wave VPN for Linux deliberately does a few things and covers them properly. On 2
 - **Account:** sign in and sign out, saved automatically in the keyring. Without a keyring, a clear warning before plain-text storage in a private file. Sign-out removes saved credentials.
 - **Eddie import:** read-only, into the sign-in form for review, including keyring-protected profiles. Never changes Eddie's files or keyring items; advanced Eddie settings are left out.
 - **Servers:** best, country or specific server; search and favorites; connect, disconnect, switch and automatic retry, with accurate connection and protection status.
-- **Network Lock:** stays on after Disconnect, cancel, Quit, failures and crashes. Recover removes tunnel resources and keeps an enabled lock; a lock you turned off stays off. The toggle works during a live tunnel and your choice carries over to future connections.
+- **Network Lock:** off until you turn it on; then it stays on after Disconnect, cancel, Quit, failures and crashes. Recover removes tunnel resources and keeps an enabled lock; a lock you turned off stays off. The toggle works during a live tunnel and your choice carries over to future connections.
 - **Status:** traffic stats, logs, tray, appearance and transfer units.
 - **One-time setup:** a single administrator authorization installs the networking helper, after which the GUI never asks for a password. This helper is separate from the optional boot lock.
 

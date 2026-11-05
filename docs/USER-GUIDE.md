@@ -21,9 +21,9 @@ DNS works with systemd-resolved, resolvconf, or a plain `/etc/resolv.conf` (back
 
 ## Network Lock
 
-Network Lock is an nftables firewall that blocks traffic outside the tunnel.
+Network Lock is an nftables firewall that blocks traffic outside the tunnel. It's off until you turn it on in **Settings → Network lock**, because while it's on you have no internet without the VPN.
 
-- It stays on after **Disconnect**, **Quit**, **Recover** and crashes, until you turn it off. That's deliberate: a crash must never quietly unblock your traffic.
+- Once on, it stays on after **Disconnect**, **Quit**, **Recover** and crashes, until you turn it off. That's deliberate: a crash must never quietly unblock your traffic.
 - You can toggle it while connected; the tunnel keeps running and your choice is remembered.
 - Allowed while locked: loopback, DHCP and IPv6 neighbour discovery, the tunnel itself, and AirVPN's pinned sign-in addresses. LAN access and ping outside the tunnel are off by default (**Settings → Network lock**).
 - To get ordinary internet back, turn it off in **Settings**, or run `sudo wave-vpn lock-disable`.

@@ -10,7 +10,9 @@
 - **A tarball that explains itself.** It now holds a `README.txt` and an `install.sh` that asks for your password, offers to install missing tools, and sets everything up. You no longer need the source archive to install.
 - **Clean uninstall.** Removing the package, or `sudo wave-vpn-uninstall` for the tarball, disconnects and turns off Network Lock before removing the app.
 
-Networking, Network Lock, the root helper and recovery are unchanged from 0.1.1.
+- **Network Lock is now opt-in.** New installs start with it off; turn it on in **Settings → Network lock**. While it's on you have no internet without the VPN, even after you disconnect, which surprised people on first use. If you already chose a setting, it's kept.
+
+Otherwise networking, Network Lock, the root helper and recovery are unchanged from 0.1.1.
 
 ## Install
 

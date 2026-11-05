@@ -19,7 +19,7 @@ An unofficial WireGuard client for [AirVPN](https://airvpn.org) on the Linux des
 
 - Sign in with your AirVPN account; credentials go to your desktop keyring
 - Best-server choice, or a sortable server table with search, favorites and countries
-- **Network Lock**: an nftables firewall that blocks traffic outside the tunnel, and stays on after Disconnect, Quit or a crash until you turn it off
+- **Network Lock** (opt-in): an nftables firewall that blocks traffic outside the tunnel, and once on, stays on after Disconnect, Quit or a crash until you turn it off
 - Checks every connection: AirVPN confirms the tunnel's IPv4 and IPv6 identity and that your DNS reaches AirVPN
 - **Recover** undoes Wave's own DNS and tunnel changes after a failure, even before you sign in
 - Tray indicator, connection log and a reviewed support report with nothing private in it

@@ -659,5 +659,12 @@ which openSUSE satisfied with the library alone and no `secret-tool`; fixed. A
 rootless container can't run `nft`, which showed removal failing when Wave had
 set nothing up; teardown now runs only when Wave state exists.
 
+**Network Lock default:** on the CachyOS laptop, an enabled lock (the old default,
+kept after disconnect or a failed connect) cut the maintainer's internet while no
+tunnel was up. 0.1.2 makes the lock opt-in. The isolated network suite and the
+authenticated live suite now request the lock explicitly instead of relying on
+the default; the full isolated suite passed on the Ubuntu VM with an
+Ubuntu-built debug binary of that change.
+
 Not covered: GUI connect with these packages, a real Fedora or openSUSE desktop,
 upgrade between two signed package releases, and the final CI-built artifacts.

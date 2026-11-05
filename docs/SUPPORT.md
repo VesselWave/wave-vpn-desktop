@@ -33,7 +33,7 @@ Upgrading and uninstalling are in the [user guide](USER-GUIDE.md#upgrading-and-u
 
 ## Troubleshooting
 
-**No internet after disconnecting or quitting.** Network Lock is on, as designed. Turn it off in Settings, or run `sudo wave-vpn lock-disable`.
+**No internet after disconnecting or quitting.** Network Lock is on: once you enable it, it blocks everything outside the VPN until you turn it off. Turn it off in Settings, or run `sudo wave-vpn lock-disable`.
 
 **Sign-in fails after a broken VPN session.** A wrong password and an unreachable AirVPN show different messages, so a network failure doesn't mean your password is wrong. Use **Overview → Recover** (it works while signed out), then retry. An enabled Network Lock is kept; turn it off separately only if you mean to. A new connection also repairs Wave's leftover state after a crash.
 
