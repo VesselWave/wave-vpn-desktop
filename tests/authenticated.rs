@@ -20,11 +20,14 @@ fn authenticated_profiles_for_isolated_linux_verification() -> Result<()> {
     let mut servers: Vec<_> = manifest.servers.iter().filter(|s| s.available()).collect();
     servers.sort_by(|a, b| manifest.score(a).total_cmp(&manifest.score(b)));
     let mut requests = Vec::new();
+    // The live suite checks that nothing escapes the tunnel, so it needs the lock.
+    let mut locked = Options::default();
+    locked.set("netlock", "true".into());
     for server in servers {
         if let Ok(profile) = account.profile(server, "", mode, false) {
             requests.push(Request {
                 profile,
-                options: Options::default(),
+                options: locked.clone(),
                 checks: manifest.provider_check(server),
                 // The live manifest's own bootstrap, as the desktop would pass it.
                 bootstrap: manifest

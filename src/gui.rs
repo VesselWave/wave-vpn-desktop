@@ -1776,6 +1776,13 @@ fn window_settings() -> iced::window::Settings {
         },
         min_size: Some(iced::Size::new(560., 440.)),
         exit_on_close_request: false,
+        // Matches wave-vpn.desktop, so docks and task switchers show the app's
+        // name and icon (Wayland app_id, X11 WM_CLASS).
+        #[cfg(target_os = "linux")]
+        platform_specific: iced::window::settings::PlatformSpecific {
+            application_id: "wave-vpn".into(),
+            ..Default::default()
+        },
         ..Default::default()
     }
 }

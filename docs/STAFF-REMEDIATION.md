@@ -52,3 +52,12 @@ The documented Singapore congestion-policy counterexample remains; weights were
 not retuned from one access network. Authenticated interactive GUI timing, desktop
 keyring unlock, physical suspend and sustained reliability remain unqualified.
 No release/tag or forum reply was made. Upgrade the installed helper with the GUI.
+
+## Concurrent main integration
+
+Before push, merged the existing0.1.2 packaging/installer and Network Lock opt-in
+changes from main, preserving their behavior and release record. Only changelog
+and verification-history text conflicted; both sets were retained. Complete Rust
+tests, strict Clippy, release build and fmt passed again on macOS after integration.
+The native VM evidence above predates this merge; no fresh native post-merge
+qualification or new packaged release is claimed.

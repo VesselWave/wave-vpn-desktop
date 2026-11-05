@@ -27,9 +27,9 @@ DNS works with systemd-resolved, resolvconf, or a plain `/etc/resolv.conf` (back
 
 ## Network Lock
 
-Network Lock is an nftables firewall that blocks traffic outside the tunnel.
+Network Lock is an nftables firewall that blocks traffic outside the tunnel. It's off until you turn it on in **Settings → Network lock**, because while it's on you have no internet without the VPN.
 
-- It stays on after **Disconnect**, **Quit**, **Recover** and crashes, until you turn it off. That's deliberate: a crash must never quietly unblock your traffic.
+- Once on, it stays on after **Disconnect**, **Quit**, **Recover** and crashes, until you turn it off. That's deliberate: a crash must never quietly unblock your traffic.
 - You can toggle it while connected; the tunnel keeps running and your choice is remembered.
 - Allowed while locked: loopback, DHCP and IPv6 neighbour discovery, the tunnel itself, and AirVPN's sign-in addresses (built-in and from the latest server list; TCP to the listed port only). LAN access and ping outside the tunnel are off by default (**Settings → Network lock**).
 - To get ordinary internet back, turn it off in **Settings**, or run `sudo wave-vpn lock-disable`.
@@ -63,14 +63,18 @@ The file is created with mode 0600 and contains your private key. Keep it privat
 
 ## Upgrading and uninstalling
 
-Disconnect and quit Wave VPN, then run the same install command with the new release. Preferences are kept, and installation refuses to run while a recovery record is active.
+**Upgrade** by installing the new release the same way you installed the old one: the new package with your package manager, or `./install.sh` from the new tarball. Preferences are kept and the networking helper is updated too. Disconnect first: the tarball installer refuses to run while connected, and a package installed while connected asks you to run `sudo wave-vpn service-install` once you disconnect.
+
+**Uninstall** with the method you installed with:
 
 ```sh
-sudo wave-vpn lock-uninstall                   # only if you installed the boot lock
-sudo bash wave-vpn-0.1.1/scripts/install.sh uninstall
+sudo apt remove wave-vpn       # Ubuntu, Debian
+sudo dnf remove wave-vpn       # Fedora (openSUSE: sudo zypper remove wave-vpn)
+sudo pacman -R wave-vpn        # Arch, CachyOS
+sudo wave-vpn-uninstall        # tarball install
 ```
 
-The uninstaller removes Wave's binaries, helper and systemd units. It keeps your preferences in `~/.config/wave-vpn`, leaves dependency packages alone, and refuses to run while a recovery record or boot lock is installed.
+Uninstalling first disconnects, turns off Network Lock and removes the networking helper, its systemd units and the boot lock, so you're never left offline without the app. It keeps your preferences in `~/.config/wave-vpn` and leaves dependency packages alone. Releases before 0.1.2 were uninstalled with `sudo bash wave-vpn-0.1.x/scripts/install.sh uninstall` from their source folder.
 
 ## Scope
 

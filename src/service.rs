@@ -39,6 +39,13 @@ pub fn command_cancellable(
     #[cfg(target_os = "linux")]
     {
         if !Path::new(linux::SOCKET).exists() {
+            // The helper is copied from this executable, which must be root-owned:
+            // a binary run straight from a download folder can never qualify.
+            anyhow::ensure!(
+                linux::trusted(executable).is_ok(),
+                "Wave VPN isn't installed yet. Install the package for your system, or run \
+                 ./install.sh from the downloaded folder, then open Wave VPN from your app menu."
+            );
             let mut setup = Command::new("/usr/bin/pkexec")
                 .arg(executable)
                 .arg("service-install")
@@ -113,7 +120,7 @@ mod linux {
         );
         Ok(())
     }
-    fn trusted(path: &Path) -> Result<PathBuf> {
+    pub(super) fn trusted(path: &Path) -> Result<PathBuf> {
         let path = path.canonicalize()?;
         for parent in path.ancestors() {
             let metadata = fs::metadata(parent)?;
@@ -215,7 +222,10 @@ mod linux {
         systemctl(&["disable", "--now", "wave-vpn-service.socket"])?;
         systemctl(&["stop", "wave-vpn-service.service"])?;
         for path in [SOCKET_UNIT, SERVICE_UNIT, HELPER, CONFIG] {
-            fs::remove_file(path)?;
+            match fs::remove_file(path) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
+                _ => {}
+            }
         }
         systemctl(&["daemon-reload"])?;
         Ok(())

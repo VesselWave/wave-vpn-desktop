@@ -10,9 +10,11 @@ Needs a recent stable Rust. VPN connections need Linux with kernel WireGuard, `w
 cargo test --locked --all-targets
 cargo clippy --locked --all-targets -- -D warnings
 cargo build --release --locked --bins
-sudo bash scripts/install.sh install
+./scripts/install.sh            # installs under /usr/local; asks for sudo
 wave-vpn-gui
 ```
+
+`scripts/package.sh OUTPUT_DIR` builds the .deb, .rpm and Arch packages from the release binaries with [nFPM](https://nfpm.goreleaser.com) (`NFPM=/path/to/nfpm` if it isn't on PATH). `scripts/release.sh` builds the whole release: the tarball (`README.txt`, `install.sh`, `files/`), the packages, the source archive and checksums. Package install and removal hooks are in `packaging/scripts/`.
 
 `WAVE_PREVIEW=1 wave-vpn-gui` starts the UI with sample data and no networking; add `WAVE_PREVIEW_SCENE=connected` (or `diagnostics`, `unknown`, `logged-out`, `error`) and `WAVE_CAPTURE_DIR=…` to save screenshots.
 

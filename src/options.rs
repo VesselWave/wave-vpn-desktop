@@ -241,7 +241,9 @@ pub const FIELDS: &[Field] = &[
         "Connection",
         Lock,
         Input::Toggle,
-        "true"
+        // Off until the user opts in: an enabled lock also blocks the internet
+        // while disconnected, which surprised people on first use.
+        "false"
     ),
     f!(
         "allow_lan",

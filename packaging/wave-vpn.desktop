@@ -7,3 +7,4 @@ Icon=wave-vpn
 Terminal=false
 Categories=Network;Security;
 StartupNotify=true
+StartupWMClass=wave-vpn

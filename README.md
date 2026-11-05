@@ -19,7 +19,7 @@ An unofficial WireGuard client for [AirVPN](https://airvpn.org) on the Linux des
 
 - Sign in with your AirVPN account; credentials go to your desktop keyring
 - Best-server choice, or a sortable server table with search, favorites and countries
-- **Network Lock**: an nftables firewall that blocks traffic outside the tunnel, and stays on after Disconnect, Quit or a crash until you turn it off
+- **Network Lock** (opt-in): an nftables firewall that blocks traffic outside the tunnel, and once on, stays on after Disconnect, Quit or a crash until you turn it off
 - Checks every connection: AirVPN confirms the tunnel's IPv4 and IPv6 identity and that your DNS reaches AirVPN
 - **Recover** undoes Wave's own DNS and tunnel changes after a failure, even before you sign in
 - Tray indicator, connection log and a reviewed support report with nothing private in it
@@ -30,27 +30,23 @@ An unofficial WireGuard client for [AirVPN](https://airvpn.org) on the Linux des
 
 ## Install
 
-Built for Ubuntu 24.04 (x86_64, GNOME, systemd). Other distributions may work but aren't tested.
+Built for x86_64 Linux with systemd; tested most on Ubuntu 24.04 GNOME. Download the file for your system from [vpn.vwave.me](https://vpn.vwave.me/#download) or the [latest release](https://github.com/VesselWave/wave-vpn-desktop/releases/latest), then install it:
 
-```sh
-sudo apt install wireguard-tools iproute2 nftables libsecret-tools
-```
+| System | Download | Install with |
+| --- | --- | --- |
+| Ubuntu, Debian, Mint | [.deb](https://github.com/VesselWave/wave-vpn-desktop/releases/download/v0.1.2/wave-vpn_0.1.2-1_amd64.deb) | `sudo apt install ./wave-vpn_0.1.2-1_amd64.deb` |
+| Fedora | [.rpm](https://github.com/VesselWave/wave-vpn-desktop/releases/download/v0.1.2/wave-vpn-0.1.2-1.x86_64.rpm) | `sudo dnf install ./wave-vpn-0.1.2-1.x86_64.rpm` |
+| openSUSE | [.rpm](https://github.com/VesselWave/wave-vpn-desktop/releases/download/v0.1.2/wave-vpn-0.1.2-1.x86_64.rpm) | `sudo zypper install --allow-unsigned-rpm ./wave-vpn-0.1.2-1.x86_64.rpm` |
+| Arch, CachyOS, Manjaro | [.pkg.tar.zst](https://github.com/VesselWave/wave-vpn-desktop/releases/download/v0.1.2/wave-vpn-0.1.2-1-x86_64.pkg.tar.zst) | `sudo pacman -U ./wave-vpn-0.1.2-1-x86_64.pkg.tar.zst` |
+| Anything else | [.tar.gz](https://github.com/VesselWave/wave-vpn-desktop/releases/download/v0.1.2/wave-vpn-0.1.2-x86_64-unknown-linux-gnu.tar.gz) | Extract it, open a terminal in the folder, run `./install.sh` |
 
-Download the binary and source archives, checksums, signature and key from [vpn.vwave.me](https://vpn.vwave.me), [verify them](#verify-your-download), then:
+Run the command in the folder you downloaded to. Packages bring in WireGuard tools, iproute2, nftables and libsecret; the tarball's installer offers to install them with your package manager. Then open **Wave VPN** from your app menu.
 
-```sh
-tar -xzf wave-vpn-0.1.1-source.tar.gz
-tar -xzf wave-vpn-0.1.1-x86_64-unknown-linux-gnu.tar.gz
-sudo bash wave-vpn-0.1.1/scripts/install.sh install \
-  "$PWD/wave-vpn-0.1.1-x86_64-unknown-linux-gnu/usr/local/bin"
-wave-vpn-gui
-```
-
-The installer adds a small root-owned helper and authorizes your user once, so connecting never asks for a password. Keep the source folder: it holds the uninstaller. Upgrading, uninstalling and recovery are in the [user guide](docs/USER-GUIDE.md).
+Wave VPN connects through a small root-owned helper that it authorizes for your user once, so connecting never asks for a password. Installing from a terminal with `sudo` sets it up; otherwise your first Connect asks for your password. To uninstall, remove the `wave-vpn` package (`sudo apt remove wave-vpn`, `sudo dnf remove wave-vpn`, `sudo pacman -R wave-vpn`) or run `sudo wave-vpn-uninstall` for the tarball. Both disconnect and turn off Network Lock first. More in the [user guide](docs/USER-GUIDE.md).
 
 ## Verify your download
 
-Every release ships signed SHA-256 checksums. The release key is on [keys.openpgp.org](https://keys.openpgp.org/search?q=414018C0BBB8C0A70A80BF570AA32CCB2C0B3951) and [vpn.vwave.me](https://vpn.vwave.me/#verify):
+Every release ships signed SHA-256 checksums for all its files. The release key is on [keys.openpgp.org](https://keys.openpgp.org/search?q=414018C0BBB8C0A70A80BF570AA32CCB2C0B3951) and [vpn.vwave.me](https://vpn.vwave.me/#verify):
 
 ```text
 4140 18C0 BBB8 C0A7 0A80  BF57 0AA3 2CCB 2C0B 3951
@@ -58,9 +54,9 @@ Every release ships signed SHA-256 checksums. The release key is on [keys.openpg
 
 ```sh
 gpg --recv-keys 414018C0BBB8C0A70A80BF570AA32CCB2C0B3951
-gpg --verify wave-vpn-0.1.1-x86_64-unknown-linux-gnu-SHA256SUMS.asc \
-             wave-vpn-0.1.1-x86_64-unknown-linux-gnu-SHA256SUMS
-sha256sum --ignore-missing -c wave-vpn-0.1.1-x86_64-unknown-linux-gnu-SHA256SUMS
+gpg --verify wave-vpn-0.1.2-x86_64-unknown-linux-gnu-SHA256SUMS.asc \
+             wave-vpn-0.1.2-x86_64-unknown-linux-gnu-SHA256SUMS
+sha256sum --ignore-missing -c wave-vpn-0.1.2-x86_64-unknown-linux-gnu-SHA256SUMS
 ```
 
 If the fingerprint differs from this one, from [SECURITY.md](SECURITY.md) and from the website, don't install; report it privately.
@@ -77,7 +73,7 @@ Needs a recent stable Rust. VPN connections need Linux; the UI also builds on ma
 cargo test --locked --all-targets
 cargo clippy --locked --all-targets -- -D warnings
 cargo build --release --locked
-sudo bash scripts/install.sh install
+./scripts/install.sh            # or build packages: scripts/package.sh target/packages
 ```
 
 More, including the isolated network test suite, in [CONTRIBUTING.md](CONTRIBUTING.md); test evidence is indexed in [docs/](docs/README.md).

@@ -49,7 +49,7 @@ fn wireguard_peer_statistics_are_not_confused_with_interface_secrets() {
 fn desktop_migration_removes_hidden_bypasses_and_keeps_supported_preferences() {
     let mut legacy = Options::default();
     for (key, value) in [
-        ("netlock", "false"),
+        ("netlock", "true"),
         ("allow_ping", "true"),
         ("allowlist", "0.0.0.0/0"),
         ("routes", "0.0.0.0/0,out"),
@@ -60,7 +60,9 @@ fn desktop_migration_removes_hidden_bypasses_and_keeps_supported_preferences() {
     }
     let desktop = legacy.desktop();
     desktop.validate().unwrap();
-    assert!(!desktop.on("netlock"));
+    // A saved Network Lock choice carries over; new installs start with it off.
+    assert!(desktop.on("netlock"));
+    assert!(!Options::default().on("netlock"));
     assert!(!desktop.on("allow_ping"));
     assert!(!Options::default().on("allow_lan"));
     for key in ["allowlist", "routes", "forward_interfaces"] {

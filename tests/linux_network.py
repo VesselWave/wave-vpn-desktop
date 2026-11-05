@@ -157,7 +157,7 @@ while True: time.sleep(60)
             assert dns_probe(ip, tcp), f"DNS observation listener unavailable: {ip}"
 
     assert http("198.18.0.2"), "physical test server unreachable before connecting"
-    request = {"profile": {"private_key": client_key, "preshared_key": psk, "public_key": server_pub, "addresses": ["10.77.0.2/32", "fd77::2/128"], "dns": ["10.77.0.1"], "endpoint": "198.18.0.2", "port": 51830}, "options": {"ipv6": "in-block", "dns_mode": "resolv.conf", "allow_lan": "false", "allow_ping": "false", "verify": "true", "keepalive": "1", "handshake_first": "5"}}
+    request = {"profile": {"private_key": client_key, "preshared_key": psk, "public_key": server_pub, "addresses": ["10.77.0.2/32", "fd77::2/128"], "dns": ["10.77.0.1"], "endpoint": "198.18.0.2", "port": 51830}, "options": {"netlock": "true", "ipv6": "in-block", "dns_mode": "resolv.conf", "allow_lan": "false", "allow_ping": "false", "verify": "true", "keepalive": "1", "handshake_first": "5"}}
 
     def worker(req):
         proc = subprocess.Popen(worker_command(binary, "transport-worker"), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
