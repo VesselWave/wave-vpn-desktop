@@ -34,12 +34,13 @@ Built for x86_64 Linux with systemd; tested most on Ubuntu 24.04 GNOME. Download
 
 | System | Download | Install with |
 | --- | --- | --- |
-| Ubuntu, Debian, Mint | `wave-vpn_0.1.2-1_amd64.deb` | `sudo apt install ./wave-vpn_0.1.2-1_amd64.deb` |
-| Fedora, openSUSE | `wave-vpn-0.1.2-1.x86_64.rpm` | `sudo dnf install ./wave-vpn-0.1.2-1.x86_64.rpm` or `sudo zypper install ./wave-vpn-0.1.2-1.x86_64.rpm` |
-| Arch, CachyOS, Manjaro | `wave-vpn-0.1.2-1-x86_64.pkg.tar.zst` | `sudo pacman -U wave-vpn-0.1.2-1-x86_64.pkg.tar.zst` |
-| Anything else | `wave-vpn-0.1.2-x86_64-unknown-linux-gnu.tar.gz` | Extract it, open a terminal in the folder, run `./install.sh` |
+| Ubuntu, Debian, Mint | [.deb](https://github.com/VesselWave/wave-vpn-desktop/releases/download/v0.1.2/wave-vpn_0.1.2-1_amd64.deb) | `sudo apt install ./wave-vpn_0.1.2-1_amd64.deb` |
+| Fedora | [.rpm](https://github.com/VesselWave/wave-vpn-desktop/releases/download/v0.1.2/wave-vpn-0.1.2-1.x86_64.rpm) | `sudo dnf install ./wave-vpn-0.1.2-1.x86_64.rpm` |
+| openSUSE | [.rpm](https://github.com/VesselWave/wave-vpn-desktop/releases/download/v0.1.2/wave-vpn-0.1.2-1.x86_64.rpm) | `sudo zypper install --allow-unsigned-rpm ./wave-vpn-0.1.2-1.x86_64.rpm` |
+| Arch, CachyOS, Manjaro | [.pkg.tar.zst](https://github.com/VesselWave/wave-vpn-desktop/releases/download/v0.1.2/wave-vpn-0.1.2-1-x86_64.pkg.tar.zst) | `sudo pacman -U ./wave-vpn-0.1.2-1-x86_64.pkg.tar.zst` |
+| Anything else | [.tar.gz](https://github.com/VesselWave/wave-vpn-desktop/releases/download/v0.1.2/wave-vpn-0.1.2-x86_64-unknown-linux-gnu.tar.gz) | Extract it, open a terminal in the folder, run `./install.sh` |
 
-Packages bring in WireGuard tools, iproute2, nftables and libsecret; the tarball's installer offers to install them with your package manager. Then open **Wave VPN** from your app menu.
+Run the command in the folder you downloaded to. Packages bring in WireGuard tools, iproute2, nftables and libsecret; the tarball's installer offers to install them with your package manager. Then open **Wave VPN** from your app menu.
 
 Wave VPN connects through a small root-owned helper that it authorizes for your user once, so connecting never asks for a password. Installing from a terminal with `sudo` sets it up; otherwise your first Connect asks for your password. To uninstall, remove the `wave-vpn` package (`sudo apt remove wave-vpn`, `sudo dnf remove wave-vpn`, `sudo pacman -R wave-vpn`) or run `sudo wave-vpn-uninstall` for the tarball. Both disconnect and turn off Network Lock first. More in the [user guide](docs/USER-GUIDE.md).
 
