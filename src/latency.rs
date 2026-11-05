@@ -289,8 +289,11 @@ impl LatencyCache {
     /// What the user sees: the server's own result, else the best result
     /// measured at the same location (same data centre), else unknown.
     pub fn get(&self, name: &str) -> Ping {
-        if let Some((ping, _)) = self.pings.get(name) {
-            return *ping;
+        let now = Instant::now();
+        if let Some((ping, at)) = self.pings.get(name) {
+            if now.saturating_duration_since(*at) < MAX_AGE {
+                return *ping;
+            }
         }
         let Some(place) = self.locations.get(name) else {
             return Ping::Unknown;
@@ -299,7 +302,9 @@ impl LatencyCache {
             .iter()
             .filter(|(other, l)| *l == place && other.as_str() != name)
             .filter_map(|(other, _)| match self.pings.get(other) {
-                Some((Ping::Measured(ms), _)) => Some(*ms),
+                Some((Ping::Measured(ms), at)) if now.saturating_duration_since(*at) < MAX_AGE => {
+                    Some(*ms)
+                }
                 _ => None,
             })
             .min()
@@ -310,11 +315,14 @@ impl LatencyCache {
     pub fn ranking(&self, name: &str) -> Ping {
         match self.get(name) {
             Ping::Unknown => {
+                let now = Instant::now();
                 let mut measured: Vec<u32> = self
                     .pings
                     .values()
-                    .filter_map(|(p, _)| match p {
-                        Ping::Measured(ms) => Some(*ms),
+                    .filter_map(|(p, at)| match p {
+                        Ping::Measured(ms) if now.saturating_duration_since(*at) < MAX_AGE => {
+                            Some(*ms)
+                        }
                         _ => None,
                     })
                     .collect();

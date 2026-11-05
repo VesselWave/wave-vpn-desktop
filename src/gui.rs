@@ -1981,6 +1981,9 @@ mod safety_tests {
 }
 
 #[cfg(test)]
+#[path = "../tests/support/best_gui_cases.rs"]
+mod best_gui_cases;
+#[cfg(test)]
 #[path = "../tests/support/fix_gui_cases.rs"]
 mod fix_gui_cases;
 #[cfg(test)]

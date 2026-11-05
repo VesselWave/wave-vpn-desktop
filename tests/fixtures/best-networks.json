@@ -1,0 +1,253 @@
+[
+  {
+    "name": "Chicago",
+    "pings": {
+      "US": 24,
+      "NL": 110,
+      "SG": 230,
+      "CA": 38,
+      "JP": 165
+    },
+    "loads": {
+      "US": 30,
+      "NL": 30,
+      "SG": 30,
+      "CA": 30,
+      "JP": 30
+    },
+    "users": {
+      "US": 30,
+      "NL": 30,
+      "SG": 30,
+      "CA": 30,
+      "JP": 30
+    },
+    "expected": "US"
+  },
+  {
+    "name": "Amsterdam",
+    "pings": {
+      "US": 105,
+      "NL": 12,
+      "SG": 165,
+      "CA": 110,
+      "JP": 225
+    },
+    "loads": {
+      "US": 30,
+      "NL": 30,
+      "SG": 30,
+      "CA": 30,
+      "JP": 30
+    },
+    "users": {
+      "US": 30,
+      "NL": 30,
+      "SG": 30,
+      "CA": 30,
+      "JP": 30
+    },
+    "expected": "NL"
+  },
+  {
+    "name": "Singapore",
+    "pings": {
+      "US": 225,
+      "NL": 165,
+      "SG": 12,
+      "CA": 235,
+      "JP": 75
+    },
+    "loads": {
+      "US": 30,
+      "NL": 30,
+      "SG": 30,
+      "CA": 30,
+      "JP": 30
+    },
+    "users": {
+      "US": 30,
+      "NL": 30,
+      "SG": 30,
+      "CA": 30,
+      "JP": 30
+    },
+    "expected": "SG"
+  },
+  {
+    "name": "Tokyo",
+    "pings": {
+      "US": 150,
+      "NL": 225,
+      "SG": 75,
+      "CA": 155,
+      "JP": 14
+    },
+    "loads": {
+      "US": 30,
+      "NL": 30,
+      "SG": 30,
+      "CA": 30,
+      "JP": 30
+    },
+    "users": {
+      "US": 30,
+      "NL": 30,
+      "SG": 30,
+      "CA": 30,
+      "JP": 30
+    },
+    "expected": "JP"
+  },
+  {
+    "name": "Singapore-congested",
+    "pings": {
+      "US": 225,
+      "NL": 165,
+      "SG": 12,
+      "CA": 235,
+      "JP": 75
+    },
+    "loads": {
+      "US": 20,
+      "NL": 10,
+      "SG": 80,
+      "CA": 20,
+      "JP": 20
+    },
+    "users": {
+      "US": 20,
+      "NL": 10,
+      "SG": 80,
+      "CA": 20,
+      "JP": 20
+    },
+    "expected": "JP"
+  },
+  {
+    "name": "US-unreachable",
+    "pings": {
+      "US": -1,
+      "NL": 110,
+      "SG": 230,
+      "CA": 38,
+      "JP": 165
+    },
+    "loads": {
+      "US": 30,
+      "NL": 30,
+      "SG": 30,
+      "CA": 30,
+      "JP": 30
+    },
+    "users": {
+      "US": 30,
+      "NL": 30,
+      "SG": 30,
+      "CA": 30,
+      "JP": 30
+    },
+    "expected": "CA"
+  },
+  {
+    "name": "US-partial",
+    "pings": {
+      "US": 24,
+      "NL": null,
+      "SG": null,
+      "CA": 38,
+      "JP": null
+    },
+    "loads": {
+      "US": 30,
+      "NL": 30,
+      "SG": 30,
+      "CA": 30,
+      "JP": 30
+    },
+    "users": {
+      "US": 30,
+      "NL": 30,
+      "SG": 30,
+      "CA": 30,
+      "JP": 30
+    },
+    "expected": "US"
+  },
+  {
+    "name": "SG-missing",
+    "pings": {
+      "US": 225,
+      "NL": 165,
+      "SG": null,
+      "CA": 235,
+      "JP": 75
+    },
+    "loads": {
+      "US": 20,
+      "NL": 10,
+      "SG": 80,
+      "CA": 20,
+      "JP": 20
+    },
+    "users": {
+      "US": 20,
+      "NL": 10,
+      "SG": 80,
+      "CA": 20,
+      "JP": 20
+    },
+    "expected": "JP"
+  },
+  {
+    "name": "no-measurements",
+    "pings": {
+      "US": null,
+      "NL": null,
+      "SG": null,
+      "CA": null,
+      "JP": null
+    },
+    "loads": {
+      "US": 30,
+      "NL": 30,
+      "SG": 30,
+      "CA": 30,
+      "JP": 30
+    },
+    "users": {
+      "US": 30,
+      "NL": 30,
+      "SG": 30,
+      "CA": 30,
+      "JP": 30
+    },
+    "expected": "CA"
+  },
+  {
+    "name": "Singapore-load-policy-divergence",
+    "pings": {
+      "US": 225,
+      "NL": 165,
+      "SG": 12,
+      "CA": 235,
+      "JP": 75
+    },
+    "loads": {
+      "US": 90,
+      "NL": 10,
+      "SG": 80,
+      "CA": 90,
+      "JP": 90
+    },
+    "users": {
+      "US": 90,
+      "NL": 10,
+      "SG": 80,
+      "CA": 90,
+      "JP": 90
+    },
+    "expected": "NL",
+    "expected_android": "SG"
+  }
+]

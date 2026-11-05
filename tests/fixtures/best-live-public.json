@@ -1,0 +1,152 @@
+[
+  {
+    "name": "Guniibuu",
+    "country": "us",
+    "load": 18.0,
+    "capacity": 20000,
+    "users": 392,
+    "users_max": 150,
+    "base": 0.0,
+    "factors": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "tcp_ms": [
+      27.1,
+      26.7,
+      26.7
+    ],
+    "handshake": true,
+    "handshake_observed_s": 0.08,
+    "tunnel_icmp_ms": [
+      26.0,
+      25.9,
+      26.0,
+      25.6,
+      26.3
+    ],
+    "icmp_loss_percent": 0,
+    "icmp_spread_ms": 0.7
+  },
+  {
+    "name": "Kornephoros",
+    "country": "ca",
+    "load": 29.0,
+    "capacity": 20000,
+    "users": 376,
+    "users_max": 150,
+    "base": 0.0,
+    "factors": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "tcp_ms": [
+      34.6,
+      35.3,
+      35.3
+    ],
+    "handshake": true,
+    "handshake_observed_s": 0.07,
+    "tunnel_icmp_ms": [
+      34.6,
+      34.5,
+      35.0,
+      34.6,
+      34.6
+    ],
+    "icmp_loss_percent": 0,
+    "icmp_spread_ms": 0.5
+  },
+  {
+    "name": "Piautos",
+    "country": "nl",
+    "load": 35.0,
+    "capacity": 20000,
+    "users": 412,
+    "users_max": 150,
+    "base": 0.0,
+    "factors": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "tcp_ms": [
+      112.6,
+      113.1,
+      113.3
+    ],
+    "handshake": true,
+    "handshake_observed_s": 0.23,
+    "tunnel_icmp_ms": [
+      113.0,
+      113.0,
+      113.0,
+      113.0,
+      114.0
+    ],
+    "icmp_loss_percent": 0,
+    "icmp_spread_ms": 1.0
+  },
+  {
+    "name": "Luyten",
+    "country": "sg",
+    "load": 38.0,
+    "capacity": 2000,
+    "users": 143,
+    "users_max": 100,
+    "base": 1000.0,
+    "factors": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "tcp_ms": [
+      194.0,
+      193.2,
+      196.7
+    ],
+    "handshake": true,
+    "handshake_observed_s": 0.39,
+    "tunnel_icmp_ms": [
+      194.0,
+      194.0,
+      195.0,
+      195.0,
+      194.0
+    ],
+    "icmp_loss_percent": 0,
+    "icmp_spread_ms": 1.0
+  },
+  {
+    "name": "Taphao",
+    "country": "jp",
+    "load": 38.0,
+    "capacity": 2000,
+    "users": 130,
+    "users_max": 100,
+    "base": 1000.0,
+    "factors": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "tcp_ms": [
+      128.4,
+      129.1,
+      129.2
+    ],
+    "handshake": true,
+    "handshake_observed_s": 0.26,
+    "tunnel_icmp_ms": [
+      128.0,
+      130.0,
+      128.0,
+      128.0,
+      128.0
+    ],
+    "icmp_loss_percent": 0,
+    "icmp_spread_ms": 2.0
+  }
+]
