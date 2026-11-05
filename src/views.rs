@@ -344,11 +344,8 @@ fn overview(app: &Wave) -> Element<'_, Message> {
             .style(theme::muted),
         );
     }
-    if app.protection.worker_active && app.control.is_none() {
-        center = center.push(text("Another Wave networking operation is active. Finish it before connecting or recovering.").size(13).style(theme::warning));
-    }
-    if app.protection.recovery_needed && app.control.is_none() {
-        center = center.push(text("A previous Wave connection needs cleanup. Use Recover before reconnecting; Network Lock is retained.").size(13).style(theme::warning));
+    if let Some(warning) = app.idle_network_warning() {
+        center = center.push(text(warning).size(13).style(theme::warning));
     }
     if !app.protection_known {
         center = center.push(text("Protection status is unavailable. No protection claim is made until the networking service confirms it.").size(12).style(theme::muted));

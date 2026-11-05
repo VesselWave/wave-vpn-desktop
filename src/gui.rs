@@ -173,6 +173,7 @@ struct Wave {
     guarded: bool,
     protection_known: bool,
     protection: wave_protocol::protection::Status,
+    protection_revision: Option<u64>,
     status_pending: bool,
     network_revision: u64,
     status_checked: Instant,
@@ -272,6 +273,7 @@ impl Wave {
             guarded: false,
             protection_known: false,
             protection: Default::default(),
+            protection_revision: None,
             status_pending: false,
             network_revision: 0,
             status_checked: Instant::now() - Duration::from_secs(10),
@@ -519,6 +521,7 @@ impl Wave {
                                     }
                                     self.persistent_lock = status.persistent;
                                     self.protection = status;
+                                    self.protection_revision = Some(revision);
                                     // First confirmed lock this launch (e.g. restored at
                                     // boot): make sure it allows the latest bootstrap.
                                     if (self.guarded || self.persistent_lock)
@@ -531,6 +534,7 @@ impl Wave {
                                 Err(_) => {
                                     self.protection_known = false;
                                     self.protection.enabled = None;
+                                    self.protection_revision = None;
                                 }
                             }
                         }
@@ -825,6 +829,7 @@ impl Wave {
                             self.network_busy = false;
                             let outcome = generation.map(|g| (g, result.as_ref().err().cloned()));
                             self.protection_known = false;
+                            self.protection_revision = None;
                             self.status_checked = Instant::now() - Duration::from_secs(10);
                             if result.is_err() {
                                 self.lock_change = None;
@@ -871,6 +876,7 @@ impl Wave {
                 if self.status_checked.elapsed() >= Duration::from_secs(15) {
                     self.protection_known = false;
                     self.protection.enabled = None;
+                    self.protection_revision = None;
                 }
                 if !self.status_pending && self.status_checked.elapsed() >= Duration::from_secs(5) {
                     self.query_status();
@@ -1382,6 +1388,20 @@ impl Wave {
     fn pins_required(&self) -> bool {
         (self.guarded || self.persistent_lock) && self.since.is_none()
     }
+    fn idle_network_warning(&self) -> Option<&'static str> {
+        // Firewall events confirm protection, but not worker/recovery state.
+        // Never show a previous connection's flags while its status is refreshed.
+        if self.protection_revision != Some(self.network_revision) || self.control.is_some() {
+            return None;
+        }
+        if self.protection.worker_active {
+            Some("Another Wave networking operation is active. Finish it before connecting or recovering.")
+        } else if self.protection.recovery_needed {
+            Some("A previous Wave connection needs cleanup. Use Recover before reconnecting; Network Lock is retained.")
+        } else {
+            None
+        }
+    }
     /// Active bootstrap exceptions to show while Network Lock is on: the
     /// compiled-in definition's and the latest set the helper confirmed.
     fn bootstrap_exceptions(&self) -> Option<usize> {
@@ -1813,6 +1833,68 @@ mod safety_tests {
         app.preview = true;
         app.prefs.options = Options::default();
         app
+    }
+    #[test]
+    fn disconnect_warnings_require_a_current_idle_status() {
+        for worker_active in [false, true] {
+            let mut app = app();
+            app.control = Some(Arc::new(Mutex::new(WorkerControl::default())));
+            let status = wave_protocol::protection::Status {
+                enabled: Some(true),
+                worker_active,
+                recovery_needed: true,
+                ..Default::default()
+            };
+            let old_revision = app.network_revision;
+            app.sender
+                .send(Event::NetworkStatus(old_revision, Ok(status.clone())))
+                .unwrap();
+            let _ = app.update(Message::Tick);
+            assert!(app.idle_network_warning().is_none());
+            let _ = app.update(Message::Disconnect);
+            app.sender.send(Event::End(String::new())).unwrap();
+            let _ = app.update(Message::Tick);
+            assert_eq!(app.status, "Disconnected");
+            assert!(app.idle_network_warning().is_none());
+
+            // A firewall confirmation must not revive the stale helper flags.
+            app.transport_line(r#"{"event":"protection","enabled":true}"#.into());
+            app.sender
+                .send(Event::NetworkStatus(old_revision, Ok(status.clone())))
+                .unwrap();
+            let _ = app.update(Message::Tick);
+            assert!(app.idle_network_warning().is_none());
+
+            // Actual remaining work is still shown after a fresh query.
+            app.sender
+                .send(Event::NetworkStatus(app.network_revision, Ok(status)))
+                .unwrap();
+            let _ = app.update(Message::Tick);
+            assert!(app.idle_network_warning().is_some());
+            // Cleanup can be confirmed even if firewall inspection failed.
+            app.protection_known = false;
+            app.protection.enabled = None;
+            assert!(app.idle_network_warning().is_some());
+            app.sender
+                .send(Event::NetworkStatus(
+                    app.network_revision,
+                    Err("Service unavailable".into()),
+                ))
+                .unwrap();
+            let _ = app.update(Message::Tick);
+            assert!(app.idle_network_warning().is_none());
+            app.sender
+                .send(Event::NetworkStatus(
+                    app.network_revision,
+                    Ok(wave_protocol::protection::Status {
+                        enabled: Some(false),
+                        ..Default::default()
+                    }),
+                ))
+                .unwrap();
+            let _ = app.update(Message::Tick);
+            assert!(app.idle_network_warning().is_none());
+        }
     }
     #[test]
     fn retry_is_cancellable_and_failed_session_cannot_stay_connected() {

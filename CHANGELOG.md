@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Fixed a brief yellow warning after disconnecting: worker and recovery warnings now require a fresh networking status instead of using flags from the previous connection.
+
 ## 0.1.3 · 2026-11-05 · early release
 
 Lighter on AirVPN's infrastructure, following [AirVPN Staff feedback](https://airvpn.org/forums/topic/82017-wave-vpn-open-source-wireguard-client-for-android-and-linux-unofficial-v011/?do=findComment&comment=268064). [Release notes](docs/RELEASE-v0.1.3.md).
