@@ -60,6 +60,9 @@ enum Action {
     LockUninstall,
     LockEnable,
     LockDisable,
+    /// Refresh the bootstrap exemptions of an active lock (JSON on stdin).
+    #[command(hide = true)]
+    LockUpdate,
     #[command(hide = true)]
     LockRestore,
 }
@@ -87,6 +90,7 @@ fn main() -> Result<()> {
         Action::LockUninstall => transport::lock_action("lock-uninstall"),
         Action::LockEnable => transport::lock_action("lock-enable"),
         Action::LockDisable => transport::lock_action("lock-disable"),
+        Action::LockUpdate => transport::lock_action("lock-update"),
         Action::LockRestore => transport::lock_action("lock-restore"),
         action => {
             let login = match &action {

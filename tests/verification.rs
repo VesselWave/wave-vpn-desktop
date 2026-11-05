@@ -331,10 +331,11 @@ fn manual_refresh_is_rate_limited_and_single_flight() {
         !s.manual_allowed(t0 + MIN_MANUAL * 5),
         "one request at a time"
     );
-    s.succeeded(t0 + Duration::from_secs(2), Duration::from_secs(1800), 0.5);
+    // Unit 0: the earliest jittered deadline, exactly the interval (R2).
+    s.succeeded(t0 + Duration::from_secs(2), Duration::from_secs(1800), 0.0);
     assert!(!s.manual_allowed(t0 + Duration::from_secs(30)));
     assert!(s.manual_allowed(t0 + Duration::from_secs(2) + MIN_MANUAL));
-    assert!(!s.due(t0 + Duration::from_secs(1799)));
+    assert!(!s.due(t0 + Duration::from_secs(1801)));
     assert!(s.due(t0 + Duration::from_secs(1802)));
 }
 
@@ -356,12 +357,13 @@ fn refresh_failures_back_off_and_recover() {
     }
     assert!(attempts.len() <= 9, "{attempts:?}");
     let gaps: Vec<_> = attempts.windows(2).map(|w| w[1] - w[0]).collect();
-    assert!(gaps.iter().all(|g| *g >= 4 * 60), "{gaps:?}");
+    assert!(gaps.iter().all(|g| *g >= 5 * 60), "{gaps:?}");
     assert!(gaps.iter().all(|g| *g <= 72 * 60), "{gaps:?}");
     assert!(s.failures() >= 5);
     let now = t0 + Duration::from_secs(6 * 3600);
     s.start(now);
     s.succeeded(now, period, 0.);
     assert_eq!(s.failures(), 0);
-    assert_eq!(s.next(), now + period.mul_f64(0.8));
+    // Jitter never schedules before next_update (R2); unit 0 is exactly it.
+    assert_eq!(s.next(), now + period);
 }

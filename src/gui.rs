@@ -21,7 +21,8 @@ use std::{
     time::{Duration, Instant},
 };
 use wave_protocol::{
-    latency::{self, LatencyCache},
+    bootstrap::Exemption,
+    latency::{self, LatencyCache, LatencyStore},
     options::{Options, Section},
     schedule::{self, RefreshSchedule},
     Account, BootstrapStore, Client, Manifest, Server, TunnelProfile,
@@ -193,8 +194,16 @@ struct Wave {
     session_password: String,
     busy: bool,
     refresh: RefreshSchedule,
+    /// When the account document (devices, subscription) was last fetched.
+    account_checked: Instant,
     /// Set on sign-out so in-flight sign-in/refresh requests stop failing over.
     requests_cancel: Arc<AtomicBool>,
+    /// Latest manifest bootstrap; tests point it at a temporary directory.
+    bootstrap: BootstrapStore,
+    /// Exemptions last handed to the helper (None: not yet this launch).
+    applied_exemptions: Option<Vec<Exemption>>,
+    /// The bootstrap rotated while the helper was busy; update when idle.
+    exemptions_pending: bool,
     account: Option<Account>,
     manifest: Option<Manifest>,
     tab: Tab,
@@ -207,6 +216,8 @@ struct Wave {
     draft: Options,
     latency: LatencyCache,
     latency_cancel: Arc<AtomicBool>,
+    /// Persisted results and cooldown; None in preview and unit tests.
+    latency_store: Option<LatencyStore>,
     logs: Vec<Log>,
     filters: BTreeSet<u8>,
     status: String,
@@ -229,6 +240,12 @@ struct Wave {
     preview: bool,
     persistent_lock: bool,
     lock_installed: bool,
+    /// Tests: pretend the helper is (not) installed and record privileged
+    /// actions with their input instead of running them.
+    #[cfg(test)]
+    test_helper: Option<bool>,
+    #[cfg(test)]
+    test_privileged: Vec<(&'static str, wave_protocol::transport::LockInput)>,
 }
 impl Wave {
     fn new() -> Self {
@@ -268,7 +285,11 @@ impl Wave {
             session_password: String::new(),
             busy: false,
             refresh: RefreshSchedule::new(Instant::now()),
+            account_checked: Instant::now(),
             requests_cancel: Arc::new(AtomicBool::new(false)),
+            bootstrap: BootstrapStore::in_directory(&preferences::directory()),
+            applied_exemptions: None,
+            exemptions_pending: false,
             account: None,
             manifest: None,
             tab: Tab::Overview,
@@ -281,6 +302,7 @@ impl Wave {
             draft,
             latency: LatencyCache::default(),
             latency_cancel: Arc::new(AtomicBool::new(false)),
+            latency_store: None,
             logs: vec![],
             filters: BTreeSet::from([1, 2, 3]),
             status: "Disconnected".into(),
@@ -303,6 +325,10 @@ impl Wave {
             preview: std::env::var_os("WAVE_PREVIEW").is_some(),
             persistent_lock: false,
             lock_installed: false,
+            #[cfg(test)]
+            test_helper: None,
+            #[cfg(test)]
+            test_privileged: vec![],
         };
         if app.preview {
             preview::setup(&mut app);
@@ -314,6 +340,10 @@ impl Wave {
         let (id, open) = iced::window::open(window_settings());
         app.window = Some(id);
         if !app.preview {
+            // A restart reuses recent results and honours the probe cooldown.
+            let store = LatencyStore::in_directory(&preferences::directory());
+            store.load(&mut app.latency, Instant::now());
+            app.latency_store = Some(store);
             app.keyring_busy = true;
             let tx = app.sender.clone();
             let epoch = app.account_epoch;
@@ -474,6 +504,14 @@ impl Wave {
                                     }
                                     self.persistent_lock = status.persistent;
                                     self.protection = status;
+                                    // First confirmed lock this launch (e.g. restored at
+                                    // boot): make sure it allows the latest bootstrap.
+                                    if (self.guarded || self.persistent_lock)
+                                        && self.applied_exemptions.is_none()
+                                        && self.account.is_some()
+                                    {
+                                        self.exemptions_pending = true;
+                                    }
                                 }
                                 Err(_) => {
                                     self.protection_known = false;
@@ -508,18 +546,17 @@ impl Wave {
                             match *result {
                                 Ok((a, m)) => {
                                     let first = self.account.is_none();
-                                    if self.prefs.device.is_empty() {
-                                        self.prefs.device = a.devices[0].name.clone();
-                                    }
                                     let interval = self.refresh_interval(Some(&m));
                                     self.refresh.succeeded(
                                         Instant::now(),
                                         interval,
                                         rand::random(),
                                     );
-                                    self.account = Some(a);
+                                    self.adopt_account(a);
+                                    self.latency.set_locations(&m.servers);
                                     self.manifest = Some(m);
                                     self.error = None;
+                                    self.sync_lock_exemptions();
                                     self.log(
                                         Level::Info,
                                         "AirVPN account and server list updated".into(),
@@ -565,9 +602,11 @@ impl Wave {
                                         rand::random(),
                                     );
                                     if let Some(a) = account {
-                                        self.account = Some(a);
+                                        self.adopt_account(a);
                                     }
+                                    self.latency.set_locations(&m.servers);
                                     self.manifest = Some(m);
+                                    self.sync_lock_exemptions();
                                     if self
                                         .error
                                         .as_deref()
@@ -591,7 +630,9 @@ impl Wave {
                                         "{e}. {KEEPING_SERVERS}; next attempt in about {} min.",
                                         wait.as_secs().div_ceil(60)
                                     );
-                                    if manual {
+                                    // An account refusal needs the user's attention
+                                    // even when the refresh was automatic.
+                                    if manual || e.contains("rejected") {
                                         self.error = Some(message.clone());
                                     }
                                     self.log(Level::Warn, message);
@@ -633,8 +674,12 @@ impl Wave {
                                 Ok(()) => {
                                     self.account_epoch = self.account_epoch.wrapping_add(1);
                                     self.busy = false;
-                                    self.requests_cancel.store(true, Ordering::Relaxed);
+                                    // Fenced: no request of this session can still
+                                    // write bootstrap state once this returns.
+                                    wave_protocol::cancel_requests(&self.requests_cancel);
                                     self.requests_cancel = Arc::new(AtomicBool::new(false));
+                                    self.applied_exemptions = None;
+                                    self.exemptions_pending = false;
                                     self.refresh.reset(Instant::now());
                                     self.retry_at = None;
                                     self.retry_attempts = 0;
@@ -647,7 +692,8 @@ impl Wave {
                                     self.password.zeroize();
                                     self.session_password.zeroize();
                                     self.cancel_measurement();
-                                    self.latency.clear();
+                                    self.latency.forget();
+                                    self.save_latency();
                                     self.log(Level::Info, "Signed out".into());
                                 }
                                 Err(error) => self.error = Some(error),
@@ -682,6 +728,7 @@ impl Wave {
                                     "No server answered the latency probe; retrying later".into(),
                                 );
                             }
+                            self.save_latency();
                         }
                         Event::Line(line) => self.transport_line(line),
                         Event::End(message) => {
@@ -781,6 +828,9 @@ impl Wave {
                 if self.window.is_none() && !self.tray.as_ref().is_some_and(|t| t.visible()) {
                     return self.update(Message::Show);
                 }
+                if self.exemptions_pending && self.control.is_none() && !self.network_busy {
+                    self.sync_lock_exemptions();
+                }
                 if self.preview {
                     return preview::tick(self);
                 }
@@ -854,9 +904,10 @@ impl Wave {
                 let tx = self.sender.clone();
                 let timeout = self.prefs.options.number("http_timeout");
                 let cancel = self.requests_cancel.clone();
+                let store = self.bootstrap.clone();
                 std::thread::spawn(move || {
                     let r = Client::with_timeout(timeout)
-                        .map(|c| c.remembering(bootstrap_store()).cancellable(cancel))
+                        .map(|c| c.remembering(store).cancellable(cancel))
                         .and_then(|c| c.login(&login, &password))
                         .map_err(|error| wave_protocol::sign_in_error(&error));
                     password.zeroize();
@@ -1011,9 +1062,17 @@ impl Wave {
                         self.retry_at = None;
                         let tx = self.sender.clone();
                         let options = self.prefs.options.clone();
+                        let bootstrap = self.bootstrap.exemptions();
+                        self.applied_exemptions = Some(bootstrap.clone());
                         std::thread::spawn(move || {
-                            let result =
-                                launch_transport(profile, options, checks, control, tx.clone());
+                            let result = launch_transport(
+                                profile,
+                                options,
+                                checks,
+                                bootstrap,
+                                control,
+                                tx.clone(),
+                            );
                             let _ = tx.send(Event::End(
                                 result.err().map(|e| e.to_string()).unwrap_or_default(),
                             ));
@@ -1124,7 +1183,7 @@ impl Wave {
     }
     /// Probing is pointless while a tunnel or Network Lock is in the way.
     fn probes_blocked(&self) -> bool {
-        self.control.is_some() || self.retry_at.is_some() || self.guarded
+        self.control.is_some() || self.retry_at.is_some() || self.guarded || self.network_busy
     }
     fn manual_refresh_allowed(&self) -> bool {
         self.account.is_some() && self.refresh.manual_allowed(Instant::now())
@@ -1139,25 +1198,99 @@ impl Wave {
         if self.preview {
             return;
         }
-        let Some(manifest) = &self.manifest else {
+        let Some(targets) = self.latency_targets(rand::random()) else {
             return;
         };
-        let targets = latency::targets(&manifest.servers);
         let generation = self.latency.begin(Instant::now());
+        // Persist the cooldown now: a restart during the run must not probe again.
+        self.save_latency();
         let cancel = Arc::new(AtomicBool::new(false));
         self.latency_cancel = cancel.clone();
         let tx = self.sender.clone();
         let timeout = Duration::from_secs(self.prefs.options.number("pinger_timeout"));
         std::thread::spawn(move || {
-            let outcome = latency::measure(
-                &targets,
-                &latency::TcpProber,
-                timeout,
-                latency::PARALLEL,
-                &cancel,
-            );
+            let prober = latency::TcpProber {
+                cancel: cancel.clone(),
+            };
+            let outcome = latency::measure(&targets, &prober, timeout, latency::PARALLEL, &cancel);
             let _ = tx.send(Event::Pings(generation, outcome));
         });
+    }
+    /// A bounded sample: an explicitly selected server, then one server per
+    /// location (see `LatencyCache::sample`), never the whole fleet.
+    fn latency_targets(&mut self, seed: u64) -> Option<Vec<(String, std::net::SocketAddr)>> {
+        let manifest = self.manifest.as_ref()?;
+        self.latency.set_locations(&manifest.servers);
+        let explicit = match &self.prefs.target {
+            Target::Server(name) => Some(name.as_str()),
+            _ => None,
+        };
+        Some(self.latency.sample(
+            &manifest.servers,
+            latency::SAMPLE_BUDGET,
+            explicit.as_slice(),
+            seed,
+        ))
+    }
+    fn helper_available(&self) -> bool {
+        #[cfg(test)]
+        if let Some(available) = self.test_helper {
+            return available;
+        }
+        !self.preview && wave_protocol::service::available()
+    }
+    fn save_latency(&mut self) {
+        if let Some(store) = &self.latency_store {
+            if store.save(&self.latency, Instant::now()).is_err() {
+                self.log(Level::Debug, "Latency cache could not be saved".into());
+            }
+        }
+    }
+    /// Keep the selected device valid after the account document changes, so
+    /// a device removed on the website does not need a sign-out to recover.
+    fn adopt_account(&mut self, account: Account) {
+        if !account.devices.iter().any(|d| d.name == self.prefs.device) {
+            let previous = std::mem::take(&mut self.prefs.device);
+            self.prefs.device = account
+                .devices
+                .first()
+                .map(|d| d.name.clone())
+                .unwrap_or_default();
+            if !previous.is_empty() {
+                self.log(
+                    Level::Warn,
+                    format!(
+                        "Device {previous} is no longer in your account; using {}",
+                        self.prefs.device
+                    ),
+                );
+                self.persist();
+            }
+        }
+        self.account = Some(account);
+        self.account_checked = Instant::now();
+    }
+    /// Follow a bootstrap rotation under Network Lock: hand the helper the
+    /// latest validated exemptions when they differ from what it was given.
+    /// While a connection runs the worker owns the firewall; retry when idle.
+    fn sync_lock_exemptions(&mut self) {
+        self.exemptions_pending = false;
+        if !(self.guarded || self.persistent_lock) {
+            return;
+        }
+        let current = self.bootstrap.exemptions();
+        if self.applied_exemptions.as_ref() == Some(&current) {
+            return;
+        }
+        // Never prompt for helper installation just to follow a rotation.
+        if !self.helper_available() {
+            return;
+        }
+        if self.control.is_some() || self.network_busy {
+            self.exemptions_pending = true;
+            return;
+        }
+        self.privileged("lock-update");
     }
     fn cancel_measurement(&mut self) {
         self.latency_cancel.store(true, Ordering::Relaxed);
@@ -1197,16 +1330,20 @@ impl Wave {
         }
         let epoch = self.account_epoch;
         self.refresh.start(Instant::now());
+        // Manual refreshes fetch the account too; automatic ones only about
+        // once a day, so device or subscription changes still arrive.
+        let with_account = manual || schedule::account_due(self.account_checked, Instant::now());
         let login = self.login.clone();
         let mut password = self.session_password.clone();
         let tx = self.sender.clone();
         let timeout = self.prefs.options.number("http_timeout");
         let cancel = self.requests_cancel.clone();
+        let store = self.bootstrap.clone();
         std::thread::spawn(move || {
             let r = Client::with_timeout(timeout)
-                .map(|c| c.remembering(bootstrap_store()).cancellable(cancel))
+                .map(|c| c.remembering(store).cancellable(cancel))
                 .and_then(|c| {
-                    if manual {
+                    if with_account {
                         c.login(&login, &password).map(|(a, m)| (Some(a), m))
                     } else {
                         c.manifest(&login, &password).map(|m| (None, m))
@@ -1231,7 +1368,8 @@ impl Wave {
             }
             if v["event"] == "checks" {
                 if let Ok(results) = serde_json::from_value(v["results"].clone()) {
-                    self.checks = results;
+                    // Within one connection an observed failure stays shown.
+                    self.checks.merge(&results);
                 }
                 return;
             }
@@ -1331,13 +1469,28 @@ impl Wave {
     }
     fn privileged(&mut self, action: &'static str) {
         self.network_revision = self.network_revision.wrapping_add(1);
+        let input = wave_protocol::transport::LockInput {
+            options: self.prefs.options.clone(),
+            bootstrap: self.bootstrap.exemptions(),
+        };
+        #[cfg(test)]
+        if self.test_helper.is_some() {
+            self.network_busy = true;
+            if action != "recover" {
+                self.applied_exemptions = Some(input.bootstrap.clone());
+            }
+            self.test_privileged.push((action, input));
+            return;
+        }
         if self.preview {
             self.error = Some("Privileged actions are disabled in preview mode".into());
             return;
         }
         self.network_busy = true;
+        if action != "recover" {
+            self.applied_exemptions = Some(input.bootstrap.clone());
+        }
         let tx = self.sender.clone();
-        let opts = self.prefs.options.clone();
         std::thread::spawn(move || {
             let r = (|| -> anyhow::Result<String> {
                 let executable = std::env::current_exe()?.with_file_name("wave-vpn");
@@ -1350,7 +1503,7 @@ impl Wave {
                     .stdin
                     .take()
                     .unwrap()
-                    .write_all(&serde_json::to_vec(&opts)?)?;
+                    .write_all(&serde_json::to_vec(&input)?)?;
                 let result = child.wait_with_output()?;
                 anyhow::ensure!(
                     result.status.success(),
@@ -1405,13 +1558,11 @@ impl Drop for Wave {
     }
 }
 const KEEPING_SERVERS: &str = "Keeping the current server list";
-fn bootstrap_store() -> BootstrapStore {
-    BootstrapStore::in_directory(&preferences::directory())
-}
 fn launch_transport(
     profile: TunnelProfile,
     options: Options,
     checks: Option<wave_protocol::checks::ProviderCheck>,
+    bootstrap: Vec<Exemption>,
     control: Arc<Mutex<WorkerControl>>,
     tx: mpsc::Sender<Event>,
 ) -> anyhow::Result<()> {
@@ -1433,6 +1584,7 @@ fn launch_transport(
         profile,
         options,
         checks,
+        bootstrap,
     })?;
     bytes.push(b'\n');
     let result = input.write_all(&bytes);
@@ -1686,6 +1838,9 @@ mod safety_tests {
     }
 }
 
+#[cfg(test)]
+#[path = "../tests/support/fix_gui_cases.rs"]
+mod fix_gui_cases;
 #[cfg(test)]
 #[path = "../tests/support/staff_gui_cases.rs"]
 mod staff_gui_cases;

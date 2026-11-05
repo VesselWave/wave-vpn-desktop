@@ -9,6 +9,7 @@ use anyhow::{bail, Result};
 use std::{
     collections::BTreeMap,
     io::Read,
+    net::{IpAddr, SocketAddr},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -19,30 +20,57 @@ use std::{
 /// One encrypted POST. Tests substitute a fake; nothing else touches the network.
 pub trait Transport: Send + Sync {
     fn post(&self, url: &reqwest::Url, form: &BTreeMap<String, String>) -> Result<Vec<u8>>;
+    /// POST to a hostname endpoint pinned to `addresses`, resolved earlier, so
+    /// no DNS lookup is needed (Network Lock blocks DNS outside the tunnel).
+    fn post_pinned(
+        &self,
+        url: &reqwest::Url,
+        addresses: &[SocketAddr],
+        form: &BTreeMap<String, String>,
+    ) -> Result<Vec<u8>> {
+        let _ = addresses;
+        self.post(url, form)
+    }
 }
 impl<T: Transport + ?Sized> Transport for Arc<T> {
     fn post(&self, url: &reqwest::Url, form: &BTreeMap<String, String>) -> Result<Vec<u8>> {
         (**self).post(url, form)
     }
-}
-
-pub struct Http(reqwest::blocking::Client);
-impl Http {
-    pub fn with_timeout(seconds: u64) -> Result<Self> {
-        Ok(Self(
-            reqwest::blocking::Client::builder()
-                .redirect(reqwest::redirect::Policy::none())
-                .no_proxy()
-                .connect_timeout(Duration::from_secs(seconds.clamp(1, 3600)))
-                .timeout(Duration::from_secs(seconds.clamp(1, 3600)))
-                .build()?,
-        ))
+    fn post_pinned(
+        &self,
+        url: &reqwest::Url,
+        addresses: &[SocketAddr],
+        form: &BTreeMap<String, String>,
+    ) -> Result<Vec<u8>> {
+        (**self).post_pinned(url, addresses, form)
     }
 }
-impl Transport for Http {
-    fn post(&self, url: &reqwest::Url, form: &BTreeMap<String, String>) -> Result<Vec<u8>> {
-        let response = self
-            .0
+
+pub struct Http {
+    client: reqwest::blocking::Client,
+    timeout: Duration,
+}
+impl Http {
+    fn builder(timeout: Duration) -> reqwest::blocking::ClientBuilder {
+        reqwest::blocking::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .no_proxy()
+            .connect_timeout(timeout)
+            .timeout(timeout)
+    }
+    pub fn with_timeout(seconds: u64) -> Result<Self> {
+        let timeout = Duration::from_secs(seconds.clamp(1, 3600));
+        Ok(Self {
+            client: Self::builder(timeout).build()?,
+            timeout,
+        })
+    }
+    fn send(
+        client: &reqwest::blocking::Client,
+        url: &reqwest::Url,
+        form: &BTreeMap<String, String>,
+    ) -> Result<Vec<u8>> {
+        let response = client
             .post(url.clone())
             .form(form)
             .send()?
@@ -52,6 +80,23 @@ impl Transport for Http {
             .take((MAX_DOCUMENT + 1) as u64)
             .read_to_end(&mut bytes)?;
         Ok(bytes)
+    }
+}
+impl Transport for Http {
+    fn post(&self, url: &reqwest::Url, form: &BTreeMap<String, String>) -> Result<Vec<u8>> {
+        Self::send(&self.client, url, form)
+    }
+    fn post_pinned(
+        &self,
+        url: &reqwest::Url,
+        addresses: &[SocketAddr],
+        form: &BTreeMap<String, String>,
+    ) -> Result<Vec<u8>> {
+        let host = url.host_str().unwrap_or_default();
+        let client = Self::builder(self.timeout)
+            .resolve_to_addrs(host, addresses)
+            .build()?;
+        Self::send(&client, url, form)
     }
 }
 
@@ -64,14 +109,25 @@ impl std::fmt::Display for Cancelled {
 }
 impl std::error::Error for Cancelled {}
 
+/// Cancel the requests that share `flag`, fenced against bootstrap writes:
+/// a write already past its cancellation check finishes first, and none of
+/// those requests can write after this returns. Use instead of a plain store.
+pub fn cancel(flag: &AtomicBool) {
+    let _fence = bootstrap::persistence_lock();
+    flag.store(true, Ordering::SeqCst);
+}
+
 type Pause = Box<dyn Fn(Duration) + Send + Sync>;
+type Lookup = Box<dyn Fn(&str) -> Option<Vec<IpAddr>> + Send + Sync>;
 
 pub struct Client<T: Transport = Http> {
     transport: T,
     configurations: Vec<Bootstrap>,
     store: Option<BootstrapStore>,
+    resolved: bootstrap::Resolved,
     cancel: Option<Arc<AtomicBool>>,
     pause: Pause,
+    lookup: Lookup,
 }
 impl Client<Http> {
     pub fn new() -> Result<Self> {
@@ -87,14 +143,27 @@ impl<T: Transport> Client<T> {
             transport,
             configurations: bootstrap::candidates(None),
             store: None,
+            resolved: bootstrap::Resolved::new(),
             cancel: None,
             pause: Box::new(std::thread::sleep),
+            lookup: Box::new(bootstrap::system_lookup),
         }
     }
     /// Use the latest stored manifest bootstrap first and store each newer one.
     pub fn remembering(mut self, store: BootstrapStore) -> Self {
-        self.configurations = bootstrap::candidates(store.load());
+        let latest = store.latest();
+        self.configurations = bootstrap::candidates(latest.bootstrap);
+        self.resolved = latest.resolved;
         self.store = Some(store);
+        self
+    }
+    /// Replace the hostname resolver used for new bootstrap hostnames; tests
+    /// use a table instead of DNS.
+    pub fn resolving(
+        mut self,
+        lookup: impl Fn(&str) -> Option<Vec<IpAddr>> + Send + Sync + 'static,
+    ) -> Self {
+        self.lookup = Box::new(lookup);
         self
     }
     /// Stop between failover attempts once the flag is set.
@@ -113,7 +182,7 @@ impl<T: Transport> Client<T> {
     fn cancelled(&self) -> bool {
         self.cancel
             .as_ref()
-            .is_some_and(|c| c.load(Ordering::Relaxed))
+            .is_some_and(|c| c.load(Ordering::SeqCst))
     }
     pub fn request(&self, action: &str, login: &str, password: &str) -> Result<String> {
         anyhow::ensure!(
@@ -147,7 +216,10 @@ impl<T: Transport> Client<T> {
                 let parsed = bootstrap::endpoint(&url)?;
                 let mut envelope = Envelope::new(&self.configurations[index])?;
                 let form = envelope.encode(&parameters)?;
-                let bytes = self.transport.post(&parsed, &form)?;
+                let bytes = match bootstrap::pinned(&parsed, &self.resolved) {
+                    Some(addresses) => self.transport.post_pinned(&parsed, &addresses, &form)?,
+                    None => self.transport.post(&parsed, &form)?,
+                };
                 anyhow::ensure!(bytes.len() <= MAX_DOCUMENT, "AirVPN response too large");
                 let plain = envelope.decode(&bytes)?;
                 // A valid encrypted refusal is an account error, not an unreachable endpoint.
@@ -166,6 +238,11 @@ impl<T: Transport> Client<T> {
                 validate_document(&plain, action)?;
                 Ok(plain)
             })();
+            // Blocking HTTP cannot be interrupted, so a response may arrive
+            // after cancellation; it is discarded, never accepted or stored.
+            if self.cancelled() {
+                return Err(Cancelled.into());
+            }
             match result {
                 Ok(text) => return Ok(text),
                 Err(e) if e.is::<AccountRejected>() => return Err(e),
@@ -174,16 +251,27 @@ impl<T: Transport> Client<T> {
         }
         bail!("No AirVPN bootstrap server returned a valid response")
     }
-    fn remember(&self, manifest: &Manifest) {
-        if let (Some(store), Some(latest)) = (&self.store, &manifest.bootstrap) {
-            // Best effort: a read-only config directory must not fail sign-in.
-            let _ = store.save(latest);
+    /// Store the manifest's bootstrap, fenced by cancellation and by manifest
+    /// time. Only cancellation fails the request; other storage errors are
+    /// best effort, so a read-only config directory does not fail sign-in.
+    fn remember(&self, manifest: &Manifest) -> Result<()> {
+        let (Some(store), Some(latest)) = (&self.store, &manifest.bootstrap) else {
+            return Ok(());
+        };
+        if self.cancelled() {
+            return Err(Cancelled.into());
+        }
+        let previous = store.latest().resolved;
+        let resolved = bootstrap::resolve_hosts(latest, &previous, &*self.lookup);
+        match store.save_fenced(latest, manifest.issued, &resolved, &|| !self.cancelled()) {
+            Err(e) if e.is::<Cancelled>() => Err(e),
+            _ => Ok(()),
         }
     }
     /// Server list only: the periodic refresh does not need the account document.
     pub fn manifest(&self, login: &str, password: &str) -> Result<Manifest> {
         let manifest = parse_manifest(&self.request("manifest", login, password)?)?;
-        self.remember(&manifest);
+        self.remember(&manifest)?;
         Ok(manifest)
     }
     pub fn login(&self, login: &str, password: &str) -> Result<(Account, Manifest)> {

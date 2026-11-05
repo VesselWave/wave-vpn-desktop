@@ -57,6 +57,8 @@ pub struct Manifest {
     /// The manifest's own bootstrap, present only when it validates.
     pub bootstrap: Option<Bootstrap>,
     pub refresh_minutes: u32,
+    /// The manifest's `time` (Unix seconds), 0 if absent. Orders bootstrap writes.
+    pub issued: u64,
     pub factors: [f64; 3],
     pub check_domain: String,
     pub check_dns_query: String,
@@ -190,6 +192,10 @@ pub fn parse_manifest(text: &str) -> Result<Manifest> {
         factors,
         check_domain: root.attribute("check_domain").unwrap_or("").into(),
         check_dns_query: root.attribute("check_dns_query").unwrap_or("").into(),
+        issued: root
+            .attribute("time")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0),
         refresh_minutes: root
             .attribute("next_update")
             .and_then(|s| s.parse::<u32>().ok())

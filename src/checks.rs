@@ -26,6 +26,13 @@ pub enum Outcome {
     Unavailable,
 }
 impl Outcome {
+    /// Record `new` unless the provider already observed a mismatch: within one
+    /// connection a failure is never downgraded to unavailable or verified.
+    pub fn latch(&mut self, new: Outcome) {
+        if *self != Self::Failed {
+            *self = new;
+        }
+    }
     pub fn label(self) -> &'static str {
         match self {
             Self::Unknown => "Not checked",
@@ -43,6 +50,12 @@ pub struct Results {
     pub dns: Outcome,
 }
 impl Results {
+    /// Apply a newer report from the same connection, keeping observed failures.
+    pub fn merge(&mut self, newer: &Results) {
+        self.ipv4.latch(newer.ipv4);
+        self.ipv6.latch(newer.ipv6);
+        self.dns.latch(newer.dns);
+    }
     /// Only checks that stop a connection. An unavailable check service never
     /// does, so it must not be blamed for an unrelated disconnect.
     pub fn failure(&self) -> Option<&'static str> {
@@ -188,8 +201,35 @@ impl Verdict {
 }
 
 /// One pass over the provider checks, stopping at the first non-verified step
-/// so an unavailable service receives no further requests.
+/// so an unavailable service receives no further requests. `results` carries
+/// over between passes of one connection: a failure already recorded there
+/// makes the pass fail whatever the service answers now.
 pub fn verify_once(
+    check: &ProviderCheck,
+    locals: &[IpAddr],
+    probe: &mut dyn Probe,
+    token: &str,
+    results: &mut Results,
+    publish: &mut dyn FnMut(&Results),
+    stop: &dyn Fn() -> bool,
+) -> Verdict {
+    let verdict = if results.failure().is_some() {
+        // Already failed in an earlier pass: no further requests are needed.
+        Verdict::Unavailable
+    } else {
+        pass(check, locals, probe, token, results, publish, stop)
+    };
+    match (verdict, results.failure()) {
+        (Verdict::Verified | Verdict::Unavailable, Some(_)) if results.dns == Outcome::Failed => {
+            Verdict::Failed(DNS_FAILED)
+        }
+        (Verdict::Verified | Verdict::Unavailable, Some(_)) => Verdict::Failed(IDENTITY_FAILED),
+        _ => verdict,
+    }
+}
+const DNS_FAILED: &str = "System DNS verification failed; use Recover and retry";
+const IDENTITY_FAILED: &str = "VPN exit identity check failed";
+fn pass(
     check: &ProviderCheck,
     locals: &[IpAddr],
     probe: &mut dyn Probe,
@@ -211,14 +251,16 @@ pub fn verify_once(
             &mut results.ipv4
         };
         match probe.tunnel(*local) {
-            Ok(response) if verify_ip(&response, *local).is_ok() => *outcome = Outcome::Verified,
+            Ok(response) if verify_ip(&response, *local).is_ok() => {
+                outcome.latch(Outcome::Verified)
+            }
             Ok(_) => {
-                *outcome = Outcome::Failed;
+                outcome.latch(Outcome::Failed);
                 publish(results);
-                return Verdict::Failed("VPN exit identity check failed");
+                return Verdict::Failed(IDENTITY_FAILED);
             }
             Err(_) => {
-                *outcome = Outcome::Unavailable;
+                outcome.latch(Outcome::Unavailable);
                 publish(results);
                 return Verdict::Unavailable;
             }
@@ -233,14 +275,16 @@ pub fn verify_once(
         return Verdict::Stopped;
     }
     match probe.dns(locals[0]) {
-        Ok(response) if verify_dns(&response, token).is_ok() => results.dns = Outcome::Verified,
+        Ok(response) if verify_dns(&response, token).is_ok() => {
+            results.dns.latch(Outcome::Verified)
+        }
         Ok(_) => {
-            results.dns = Outcome::Failed;
+            results.dns.latch(Outcome::Failed);
             publish(results);
-            return Verdict::Failed("System DNS verification failed; use Recover and retry");
+            return Verdict::Failed(DNS_FAILED);
         }
         Err(_) => {
-            results.dns = Outcome::Unavailable;
+            results.dns.latch(Outcome::Unavailable);
             publish(results);
             return Verdict::Unavailable;
         }
@@ -258,6 +302,8 @@ pub fn retry_pause(attempt: u32) -> Duration {
 
 /// Verification happens once per connection, like Eddie: a few spaced passes
 /// right after the first handshake, then never again for that session.
+/// Only an unavailable check service is retried. A provider-observed mismatch
+/// is terminal: a later outage or success cannot erase it.
 pub fn verify_at_connect(
     attempts: u64,
     once: &mut dyn FnMut() -> Verdict,
@@ -274,15 +320,23 @@ pub fn verify_at_connect(
             return Verdict::Stopped;
         }
         last = once();
-        if matches!(
-            last,
-            Verdict::Verified | Verdict::Skipped | Verdict::Stopped
-        ) {
+        if last != Verdict::Unavailable {
             return last;
         }
     }
     last
 }
+
+/// The worker error for a provider-observed (or local route) mismatch. It is
+/// reported as not retryable, so clients do not reconnect into the same leak.
+#[derive(Debug)]
+pub struct VerificationFailed(pub &'static str);
+impl std::fmt::Display for VerificationFailed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
+}
+impl std::error::Error for VerificationFailed {}
 
 /// What the connection monitor should do on a tick.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

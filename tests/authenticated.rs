@@ -26,6 +26,12 @@ fn authenticated_profiles_for_isolated_linux_verification() -> Result<()> {
                 profile,
                 options: Options::default(),
                 checks: manifest.provider_check(server),
+                // The live manifest's own bootstrap, as the desktop would pass it.
+                bootstrap: manifest
+                    .bootstrap
+                    .as_ref()
+                    .map(|b| b.exemptions(&Default::default()))
+                    .unwrap_or_default(),
             });
             println!(
                 "Selected public server {} for live verification",

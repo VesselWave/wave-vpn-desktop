@@ -4,6 +4,17 @@
 use anyhow::Result;
 use std::{path::Path, process::Command};
 
+/// Whether the networking service is installed, so an action will not prompt.
+pub fn available() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        Path::new(linux::SOCKET).exists()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
+    }
+}
 pub fn command(executable: &Path, action: &str) -> Result<Command> {
     command_cancellable(executable, action, || false)
 }
@@ -215,7 +226,12 @@ mod linux {
     fn allowed(action: &str) -> bool {
         matches!(
             action,
-            "transport-worker" | "recover" | "lock-enable" | "lock-disable" | "network-status"
+            "transport-worker"
+                | "recover"
+                | "lock-enable"
+                | "lock-disable"
+                | "lock-update"
+                | "network-status"
         )
     }
     fn finish(stream: &mut UnixStream, success: bool) -> Result<()> {

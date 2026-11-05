@@ -24,6 +24,7 @@ What has been tested on Wave VPN for Linux, what failed, and what's still open. 
 
 ## Log, newest first
 
+- [Staff regression fix pass — 2026-11-05](#staff-regression-fix-pass--2026-11-05)
 - [Infrastructure load fixes — 2026-11-05](#infrastructure-load-fixes--2026-11-05)
 - [Parent review — 2026-10-23 UTC](#parent-review--2026-10-23-utc)
 - [Round 4 release verification — 2026-10-23 UTC](#round-4-release-verification--2026-10-23-utc)
@@ -36,6 +37,26 @@ What has been tested on Wave VPN for Linux, what failed, and what's still open. 
 - [Focused desktop verification — 2026-10-21](#focused-desktop-verification--2026-10-21)
 - [Desktop parity update — 2026-10-21](#desktop-parity-update--2026-10-21)
 - [Initial verification](#initial-verification)
+
+## Staff regression fix pass — 2026-11-05
+
+Fixes R1–R4 of the [independent review](STAFF-REGRESSION-REVIEW.md) and the
+remaining probe-load concern. The four known-bug cases now run unconditionally
+and pass with their original expectations. New deterministic guards are in
+`tests/fix_regressions.rs`, `tests/bootstrap.rs` (`fix_*`) and the GUI test
+target (`tests/support/fix_gui_cases.rs`, real `Wave::update` wiring); see the
+review's resolution section for the list. Two mutations (removing the stale
+manifest fence; replacing the GUI status merge with overwrite) were applied
+temporarily and each made a new test fail, then restored.
+
+Host (macOS ARM64): `cargo test --locked --all-targets`, `cargo clippy --locked
+--all-targets -- -D warnings` and `cargo build --release --locked --bins` pass.
+`cargo clippy --locked --target aarch64-unknown-linux-gnu --all-targets -- -D
+warnings` passes as a type check only (stub C headers for `ring`'s build
+script; nothing linked or run). The Linux helper paths (`lock-update`, session
+and boot lock exemptions, worker failure event) are not executed by these tests;
+the isolated network suite, kernel nftables effects, reboot restore and the
+authenticated live suite still need the Linux VM gate.
 
 ## Infrastructure load fixes — 2026-11-05
 

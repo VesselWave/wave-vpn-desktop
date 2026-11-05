@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Independently implemented controller for Linux WireGuard tools and nftables.
 use crate::{
+    bootstrap::Exemption,
     firewall,
     options::Options,
-    transport::{parse_stats, Request, Stats},
+    transport::{parse_stats, LockInput, PersistentLock as LockConfig, Request, Stats},
     TunnelProfile,
 };
 use anyhow::{bail, ensure, Context, Result};
@@ -25,6 +26,9 @@ const DIR: &str = "/run/wave-vpn";
 const CONFIG: &str = "/run/wave-vpn/wavevpn0.conf";
 const IFACE: &str = "wavevpn0";
 const LOCK_CONFIG: &str = "/etc/wave-vpn/lock.json";
+/// Exemptions of the lock applied most recently, reused when the lock is
+/// re-applied without new input (cleanup, Recover).
+const SESSION_BOOTSTRAP: &str = "/run/wave-vpn/bootstrap.json";
 const UNIT: &str = "/etc/systemd/system/wave-vpn-lock.service";
 const MARK: &str = "51820";
 const RULE: &str = "18500";
@@ -39,11 +43,6 @@ struct Recovery {
     families: Vec<String>,
     resolver_swapped: bool,
     resolver_content: Option<String>,
-}
-#[derive(Serialize, Deserialize)]
-struct LockConfig {
-    options: Options,
-    enabled: bool,
 }
 fn root() -> Result<()> {
     ensure!(
@@ -156,13 +155,31 @@ fn read_private(path: &str) -> Result<Option<Vec<u8>>> {
 }
 fn lock_config() -> Result<Option<LockConfig>> {
     read_private(LOCK_CONFIG)?
-        .map(|b| {
-            let c: LockConfig =
-                serde_json::from_slice(&b).context("Invalid persistent lock configuration")?;
-            c.options.validate()?;
-            Ok(c)
-        })
+        .map(|b| LockConfig::parse(&b))
         .transpose()
+}
+fn save_lock_config(config: &LockConfig) -> Result<()> {
+    atomic(LOCK_CONFIG, &serde_json::to_vec(config)?)
+}
+/// Explicit exemptions win; otherwise those of the lock applied last in this
+/// boot, then the persistent configuration's. Invalid stored entries are
+/// dropped, which only blocks more.
+fn exemptions(explicit: &[Exemption]) -> Vec<Exemption> {
+    if !explicit.is_empty() {
+        return explicit.to_vec();
+    }
+    if let Ok(Some(bytes)) = read_private(SESSION_BOOTSTRAP) {
+        if let Ok(mut list) = serde_json::from_slice::<Vec<Exemption>>(&bytes) {
+            list.retain(|e| e.validate().is_ok());
+            list.truncate(crate::bootstrap::MAX_EXEMPTIONS);
+            return list;
+        }
+    }
+    lock_config()
+        .ok()
+        .flatten()
+        .map(|c| c.bootstrap)
+        .unwrap_or_default()
 }
 fn persistent() -> Result<bool> {
     Ok(lock_config()?.is_some_and(|c| c.enabled))
@@ -235,13 +252,21 @@ pub fn network_status() -> Result<()> {
     );
     Ok(())
 }
-fn set_firewall(o: &Options, p: Option<&TunnelProfile>, locked: bool) -> Result<()> {
+/// Replace the table in one nft transaction, so a rotated exemption set never
+/// leaves a window without the lock.
+fn set_firewall(
+    o: &Options,
+    p: Option<&TunnelProfile>,
+    locked: bool,
+    bootstrap: &[Exemption],
+) -> Result<()> {
     let mut batch = String::new();
     if owned_firewall()? {
         batch.push_str("delete table inet wave_vpn\n");
     }
-    batch.push_str(&firewall::policy(o, p, locked)?);
+    batch.push_str(&firewall::policy(o, p, locked, bootstrap)?);
     run("nft", &["-f", "-"], Some(batch.as_bytes()))?;
+    atomic(SESSION_BOOTSTRAP, &serde_json::to_vec(bootstrap)?)?;
     publish_protection(locked)?;
     Ok(())
 }
@@ -360,7 +385,12 @@ fn configure(r: &Request, touched: &mut bool) -> Result<()> {
     text = text.replace("[Interface]", "[Interface]\nFwMark = 51820");
     atomic(CONFIG, text.as_bytes())?;
     text.zeroize();
-    set_firewall(o, Some(p), o.on("netlock") || persistent()?)?;
+    set_firewall(
+        o,
+        Some(p),
+        o.on("netlock") || persistent()?,
+        &exemptions(&r.bootstrap),
+    )?;
     println!(
         "{}",
         serde_json::json!({"event":"protection","enabled":o.on("netlock")||persistent()?})
@@ -522,7 +552,7 @@ fn configure(r: &Request, touched: &mut bool) -> Result<()> {
     cache_services(o)?;
     Ok(())
 }
-fn cleanup(o: &Options, retain: bool) -> Result<()> {
+fn cleanup(o: &Options, retain: bool, bootstrap: &[Exemption]) -> Result<()> {
     let configured_lock = lock_config()?;
     let mut errors = vec![];
     if let Some(bytes) = read_private(&format!("{DIR}/recovery.json"))? {
@@ -647,9 +677,14 @@ fn cleanup(o: &Options, retain: bool) -> Result<()> {
         errors.join("; ")
     );
     if let Some(c) = configured_lock.filter(|c| c.enabled) {
-        set_firewall(&c.options, None, true)?;
+        let list = if bootstrap.is_empty() {
+            c.bootstrap.clone()
+        } else {
+            bootstrap.to_vec()
+        };
+        set_firewall(&c.options, None, true, &list)?;
     } else if retain {
-        set_firewall(o, None, true)?;
+        set_firewall(o, None, true, &exemptions(bootstrap))?;
     } else {
         remove_firewall()?;
     }
@@ -736,10 +771,17 @@ fn tunnel_addresses(r: &Request) -> Result<Vec<std::net::IpAddr>> {
         .collect()
 }
 /// One verification pass. Runs only right after the first handshake.
-fn verify_tunnel(r: &Request, stop: &AtomicBool) -> Result<crate::checks::Verdict> {
-    use crate::checks::{Results, Verdict};
-    let mut results = Results::default();
-    publish_checks(&results);
+/// `results` is shared by every pass of this connection, so an observed
+/// failure stays visible (and fatal) whatever a later pass sees.
+fn verify_tunnel(
+    r: &Request,
+    stop: &AtomicBool,
+    results: &mut crate::checks::Results,
+) -> Result<crate::checks::Verdict> {
+    use crate::checks::Verdict;
+    if results.failure().is_some() {
+        return Ok(Verdict::Failed("Tunnel verification failed"));
+    }
     if verify_routes(r).is_err() {
         return Ok(Verdict::Failed("Public route does not use the tunnel"));
     }
@@ -757,7 +799,7 @@ fn verify_tunnel(r: &Request, stop: &AtomicBool) -> Result<crate::checks::Verdic
             &locals,
             &mut probe,
             &token,
-            &mut results,
+            results,
             &mut publish_checks,
             &stopped,
         ));
@@ -779,7 +821,7 @@ fn verify_tunnel(r: &Request, stop: &AtomicBool) -> Result<crate::checks::Verdic
             return Ok(Verdict::Unavailable);
         }
     }
-    publish_checks(&results);
+    publish_checks(results);
     Ok(Verdict::Verified)
 }
 /// Sleep in short steps so Disconnect is not delayed by a verification pause.
@@ -814,15 +856,18 @@ fn monitor(r: &mut Request, stop: &AtomicBool, changes: &mpsc::Receiver<bool>) -
             // Turning off an explicitly persistent lock must turn off its boot
             // policy too; ordinary session changes do not install a service.
             if Path::new(LOCK_CONFIG).exists() {
-                atomic(
-                    LOCK_CONFIG,
-                    &serde_json::to_vec(&LockConfig {
-                        options: r.options.clone(),
-                        enabled,
-                    })?,
-                )?;
+                save_lock_config(&LockConfig {
+                    options: r.options.clone(),
+                    enabled,
+                    bootstrap: exemptions(&r.bootstrap),
+                })?;
             }
-            set_firewall(&r.options, Some(&r.profile), enabled)?;
+            set_firewall(
+                &r.options,
+                Some(&r.profile),
+                enabled,
+                &exemptions(&r.bootstrap),
+            )?;
             publish_status()?;
             println!(
                 "{}",
@@ -842,10 +887,12 @@ fn monitor(r: &mut Request, stop: &AtomicBool, changes: &mpsc::Receiver<bool>) -
         match schedule.tick(start.elapsed(), s.handshake > 0) {
             crate::checks::Due::Verify => {
                 use crate::checks::Verdict;
+                let mut results = crate::checks::Results::default();
+                publish_checks(&results);
                 let verdict = crate::checks::verify_at_connect(
                     r.options.number("verify_retries"),
                     &mut || {
-                        verify_tunnel(r, stop).unwrap_or_else(|e| {
+                        verify_tunnel(r, stop, &mut results).unwrap_or_else(|e| {
                             eprintln!("Tunnel verification: {e}");
                             Verdict::Failed("Tunnel verification failed")
                         })
@@ -853,12 +900,14 @@ fn monitor(r: &mut Request, stop: &AtomicBool, changes: &mpsc::Receiver<bool>) -
                     &mut |d| pause(d, stop),
                     &|| stop.load(Ordering::Relaxed),
                 );
+                if let Verdict::Failed(reason) = verdict {
+                    // Terminal even if Disconnect raced it: the session ends,
+                    // cleanup runs and the failure is reported as not retryable.
+                    debug_assert!(verdict.stops_connection());
+                    return Err(crate::checks::VerificationFailed(reason).into());
+                }
                 if verdict == Verdict::Stopped {
                     return Ok(());
-                }
-                if let Verdict::Failed(reason) = verdict {
-                    debug_assert!(verdict.stops_connection());
-                    bail!("{reason}");
                 }
                 if verdict == Verdict::Unavailable {
                     // A check-service outage is not a leak. Disconnecting here
@@ -964,10 +1013,22 @@ pub fn worker() -> Result<()> {
     if let Some(check) = &r.checks {
         check.validate()?;
     }
+    crate::bootstrap::validate_exemptions(&r.bootstrap)?;
+    // Keep the boot-persistent lock current with the latest bootstrap.
+    if let Some(mut c) = lock_config()? {
+        if !r.bootstrap.is_empty() && c.bootstrap != r.bootstrap {
+            c.bootstrap = r.bootstrap.clone();
+            save_lock_config(&c)?;
+        }
+    }
     // The global operation lock proves there is no live worker. Repair only
     // our journaled resources before a new attempt, keeping confirmed protection.
     if read_private(&format!("{DIR}/recovery.json"))?.is_some() {
-        cleanup(&r.options, actual_protection()? || persistent()?)?;
+        cleanup(
+            &r.options,
+            actual_protection()? || persistent()?,
+            &r.bootstrap,
+        )?;
     }
     let stop = Arc::new(AtomicBool::new(false));
     for sig in [signal_hook::consts::SIGTERM, signal_hook::consts::SIGINT] {
@@ -1001,7 +1062,7 @@ pub fn worker() -> Result<()> {
     let retryable = configured.is_ok();
     let result = configured.and_then(|_| monitor(&mut r, &stop, &changes));
     if touched {
-        if let Err(error) = cleanup(&r.options, r.options.on("netlock")) {
+        if let Err(error) = cleanup(&r.options, r.options.on("netlock"), &r.bootstrap) {
             println!(
                 "{}",
                 serde_json::json!({"event":"failure", "retryable":false, "category":"recovery"})
@@ -1009,18 +1070,15 @@ pub fn worker() -> Result<()> {
             return Err(error);
         }
     }
-    if result.is_err() {
-        println!(
-            "{}",
-            serde_json::json!({"event":"failure", "retryable":retryable, "category":if retryable {"connection"} else {"configuration"}})
-        );
+    if let Err(error) = &result {
+        println!("{}", crate::transport::failure_event(retryable, error));
     }
     result
 }
 pub fn recover() -> Result<()> {
     let _guard = exclusive()?;
     let retain = actual_protection()?;
-    cleanup(&Options::default(), retain)?;
+    cleanup(&Options::default(), retain, &[])?;
     println!(
         "Tunnel resources restored; Network Lock {}",
         if retain || persistent()? {
@@ -1035,7 +1093,7 @@ pub fn lock_action(action: &str) -> Result<()> {
     let _guard = exclusive()?;
     if action == "lock-restore" {
         if let Some(c) = lock_config()?.filter(|c| c.enabled) {
-            set_firewall(&c.options, None, true)?;
+            set_firewall(&c.options, None, true, &c.bootstrap)?;
         }
         publish_status()?;
         return Ok(());
@@ -1044,13 +1102,10 @@ pub fn lock_action(action: &str) -> Result<()> {
     if !std::io::stdin().is_terminal() {
         bytes = read_input(false)?;
     }
-    ensure!(bytes.len() <= 65536, "Options too large");
-    let o: Options = if bytes.is_empty() {
-        Options::default()
-    } else {
-        serde_json::from_slice(&bytes)?
-    };
-    o.validate()?;
+    let LockInput {
+        options: o,
+        bootstrap,
+    } = LockInput::parse(&bytes)?;
     match action {
         "lock-install" => {
             ensure!(
@@ -1073,19 +1128,17 @@ pub fn lock_action(action: &str) -> Result<()> {
                 "/usr/local/libexec/wave-vpn-service",
                 std::fs::Permissions::from_mode(0o755),
             )?;
-            atomic(
-                LOCK_CONFIG,
-                &serde_json::to_vec(&LockConfig {
-                    options: o,
-                    enabled: false,
-                })?,
-            )?;
+            save_lock_config(&LockConfig {
+                options: o,
+                enabled: false,
+                bootstrap,
+            })?;
             atomic(UNIT,b"[Unit]\nDescription=Wave VPN persistent network lock\nDefaultDependencies=no\nAfter=local-fs.target\nBefore=network-pre.target\nWants=network-pre.target\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/usr/local/libexec/wave-vpn-service lock-restore\n[Install]\nWantedBy=multi-user.target\n")?;
             run("systemctl", &["daemon-reload"], None)?;
             run("systemctl", &["enable", "wave-vpn-lock.service"], None)?;
         }
         "lock-enable" => {
-            set_firewall(&o, None, true)?;
+            set_firewall(&o, None, true, &exemptions(&bootstrap))?;
             println!(
                 "{}",
                 serde_json::json!({"event":"protection","enabled":true})
@@ -1095,25 +1148,39 @@ pub fn lock_action(action: &str) -> Result<()> {
                 println!("{}", lock_status()?);
                 return Ok(());
             }
-            atomic(
-                LOCK_CONFIG,
-                &serde_json::to_vec(&LockConfig {
-                    options: o,
-                    enabled: true,
-                })?,
-            )?;
+            save_lock_config(&LockConfig {
+                options: o,
+                enabled: true,
+                bootstrap: exemptions(&bootstrap),
+            })?;
         }
         "lock-disable" => {
             if Path::new(LOCK_CONFIG).exists() {
-                atomic(
-                    LOCK_CONFIG,
-                    &serde_json::to_vec(&LockConfig {
-                        options: o.clone(),
-                        enabled: false,
-                    })?,
-                )?;
+                save_lock_config(&LockConfig {
+                    options: o.clone(),
+                    enabled: false,
+                    bootstrap: exemptions(&bootstrap),
+                })?;
             }
-            cleanup(&o, false)?;
+            cleanup(&o, false, &bootstrap)?;
+        }
+        "lock-update" => {
+            // Follow a bootstrap rotation. Never turns a lock on or off: only
+            // the exemptions of the active and boot-persistent locks change,
+            // each replaced atomically. Unsafe input was refused above.
+            if let Some(mut c) = lock_config()? {
+                c.bootstrap = bootstrap.clone();
+                save_lock_config(&c)?;
+            }
+            if let Some(c) = lock_config()?.filter(|c| c.enabled) {
+                set_firewall(&c.options, None, true, &c.bootstrap)?;
+            } else if actual_protection()? {
+                set_firewall(&o, None, true, &bootstrap)?;
+            }
+            println!(
+                "{}",
+                serde_json::json!({"event":"protection","enabled":actual_protection()?})
+            );
         }
         "lock-uninstall" => {
             remove_firewall()?;

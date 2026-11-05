@@ -173,3 +173,11 @@ attempts. These are requirements, not code. `src/bootstrap.rs`,
 `src/checks.rs` and their synthetic tests were newly written. The manifest
 `urls`, `auth_rsa_modulus`, `auth_rsa_exponent` and `next_update` attributes are
 the same pinned Eddie schema already referenced above. No upstream code copied.
+
+Follow-up fix pass (same day), after an independent review
+([STAFF-REGRESSION-REVIEW.md](STAFF-REGRESSION-REVIEW.md)): terminal verification
+failures, strict refresh minimums, Network Lock exemptions for the latest
+bootstrap, fenced bootstrap persistence and per-location latency sampling were
+designed and written for this repository. The manifest `time` attribute is the
+same pinned Eddie manifest schema. The `socket2` crate (MIT OR Apache-2.0)
+provides the non-blocking probe socket. No new external reference was used.

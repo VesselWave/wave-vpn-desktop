@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Typed nftables policy generator. No shell expressions or raw user rules.
-use crate::{options::Options, TunnelProfile};
+use crate::{
+    bootstrap::{validate_exemptions, Exemption},
+    options::Options,
+    TunnelProfile,
+};
 use anyhow::Result;
 pub(crate) fn address(cidr: &str) -> String {
     format!(
@@ -15,8 +19,22 @@ pub(crate) fn names<'a>(options: &'a Options, key: &str) -> impl Iterator<Item =
         .map(str::trim)
         .filter(|s| !s.is_empty())
 }
-pub fn policy(options: &Options, profile: Option<&TunnelProfile>, locked: bool) -> Result<String> {
+/// Embedded-definition endpoints: the client falls back to them after the
+/// latest manifest's, so they remain the only exemptions that need no input.
+pub fn embedded_exemptions() -> Vec<Exemption> {
+    crate::Bootstrap::eddie().exemptions(&Default::default())
+}
+/// `bootstrap` holds the validated IP/port pairs of the latest manifest
+/// bootstrap (`BootstrapStore::exemptions`). Anything unsafe or more than
+/// `MAX_EXEMPTIONS` is refused: no hostname, range, DNS port or LAN address.
+pub fn policy(
+    options: &Options,
+    profile: Option<&TunnelProfile>,
+    locked: bool,
+    bootstrap: &[Exemption],
+) -> Result<String> {
     options.validate()?;
+    validate_exemptions(bootstrap)?;
     if let Some(p) = profile {
         p.config()?;
     }
@@ -28,18 +46,18 @@ pub fn policy(options: &Options, profile: Option<&TunnelProfile>, locked: bool) 
             p.port
         ));
     }
-    // Only the pinned encrypted-bootstrap IP/port pairs can bypass the tunnel.
-    for url in crate::Bootstrap::eddie().urls {
-        let u = reqwest::Url::parse(&url)?;
-        if let Some(host) = u.host_str() {
-            if let Ok(ip) = host.trim_matches(['[', ']']).parse::<std::net::IpAddr>() {
-                out.push_str(&format!(
-                    "{} tcp dport {} accept\n",
-                    address(&ip.to_string()),
-                    u.port_or_known_default().unwrap_or(80)
-                ));
-            }
-        }
+    // Only encrypted-bootstrap IP/port pairs can bypass the tunnel: the latest
+    // validated manifest's and the embedded fallback's, TCP to that port only.
+    let exemptions: std::collections::BTreeSet<Exemption> = embedded_exemptions()
+        .into_iter()
+        .chain(bootstrap.iter().copied())
+        .collect();
+    for e in exemptions {
+        out.push_str(&format!(
+            "{} tcp dport {} accept\n",
+            address(&e.ip.to_string()),
+            e.port
+        ));
     }
     out.push_str("udp sport 68 udp dport 67 accept\nudp sport 546 udp dport 547 accept\nicmpv6 type { nd-router-solicit, nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert } accept\n");
     let block6 = options.get("ipv6") == "block"

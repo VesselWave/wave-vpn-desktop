@@ -14,7 +14,6 @@ use wave_protocol::{
 };
 
 #[test]
-#[ignore = "R1: an observed mismatch is overwritten by later unavailable/verified verdicts"]
 fn staff_observed_mismatch_cannot_be_erased_by_a_retry() {
     for later in [Verdict::Unavailable, Verdict::Verified] {
         let mut calls = 0;
@@ -36,7 +35,6 @@ fn staff_observed_mismatch_cannot_be_erased_by_a_retry() {
 }
 
 #[test]
-#[ignore = "R2: negative jitter schedules automatic refresh before the five-minute floor"]
 fn staff_minimum_refresh_interval_survives_jitter() {
     let now = Instant::now();
     let floor = schedule::interval(15, None);
@@ -85,7 +83,9 @@ fn staff_concurrent_refresh_actions_have_one_admitted_request() {
     });
     assert_eq!(admitted.load(Ordering::SeqCst), 1);
     let mut s = schedule.into_inner().unwrap();
-    s.failed(now, Duration::from_secs(1800), 0.5);
+    // Unit 0 is the earliest possible retry (R2: jitter only lengthens it), so
+    // this still pins the exact five-minute boundary.
+    s.failed(now, Duration::from_secs(1800), 0.0);
     assert!(!s.manual_allowed(now + Duration::from_secs(59)));
     assert!(s.manual_allowed(now + Duration::from_secs(60)));
     assert!(!s.due(now + Duration::from_secs(299)));
@@ -155,10 +155,11 @@ fn staff_cancellation_drains_only_inflight_probes_and_clamps_timeout() {
 }
 
 #[test]
-#[ignore = "R3: Network Lock policy has no input for the validated rotated bootstrap"]
 fn staff_network_lock_must_exempt_latest_bootstrap_ip_port() {
     // This public policy entry point is what Linux set_firewall calls. A latest
     // manifest can replace all embedded addresses; merely saving it is insufficient.
+    // R3 fix: the policy now requires the stored latest exemptions, which the
+    // desktop passes to the helper (see the GUI and transport wiring tests).
     let directory = tempfile::tempdir().unwrap();
     let store = wave_protocol::BootstrapStore::in_directory(directory.path());
     let mut latest = wave_protocol::Bootstrap::eddie();
@@ -167,7 +168,7 @@ fn staff_network_lock_must_exempt_latest_bootstrap_ip_port() {
     assert_eq!(store.load(), Some(latest));
     let mut options = wave_protocol::options::Options::default();
     options.set("allow_lan", "false".into());
-    let rules = wave_protocol::firewall::policy(&options, None, true).unwrap();
+    let rules = wave_protocol::firewall::policy(&options, None, true, &store.exemptions()).unwrap();
     assert!(
         rules.contains("ip daddr 203.0.113.77 tcp dport 8080 accept"),
         "rotated bootstrap is blocked under default-drop policy"

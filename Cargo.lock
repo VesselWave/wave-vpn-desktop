@@ -4680,6 +4680,7 @@ dependencies = [
  "sha1",
  "sha2",
  "signal-hook",
+ "socket2",
  "tempfile",
  "zeroize",
 ]

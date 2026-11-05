@@ -20,7 +20,7 @@ pub mod transport;
 
 use anyhow::{Context, Result};
 pub use bootstrap::{Bootstrap, BootstrapStore};
-pub use client::{Cancelled, Client, Http, Transport};
+pub use client::{cancel as cancel_requests, Cancelled, Client, Http, Transport};
 pub use documents::*;
 pub use envelope::{association, Envelope};
 
