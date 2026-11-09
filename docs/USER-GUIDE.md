@@ -54,6 +54,13 @@ wave-vpn diagnostics                           # metadata snapshot for a bug rep
 
 **Logs → Support report** shows exactly what would be shared: check and protection results, tool availability and fixed failure categories. Accounts, keys, addresses and raw logs are left out, and nothing is uploaded; you copy or save it yourself.
 
+## Containers and virtual machines
+
+Wave protects the programs on this computer. Containers (Docker, Podman) and NAT virtual machines (libvirt, GNOME Boxes) send their traffic through the host in a way that has two known limits:
+
+- **With Network Lock on, containers and NAT virtual machines have no network, even while connected.** Network Lock blocks all forwarded traffic, and Wave doesn't offer a tunnel exception for it in the app (custom forwarding is [out of scope](PARITY.md)). To use them, turn off Network Lock while they need the network.
+- **With Network Lock off, container DNS can bypass the tunnel.** On systems with systemd-resolved (Ubuntu, Fedora), Docker gives containers the full list of upstream DNS servers from `/run/systemd/resolve/resolv.conf`. That list includes your router's DNS next to the tunnel's, and Alpine-based images query all of them at once. Container web traffic still uses the tunnel; only those DNS lookups go to your LAN resolver. Wave keeps the DNS settings of your other network links so that NetworkManager stays in charge of them, which is why the router's server stays on that list. To keep container DNS on the tunnel, start containers with `--dns 10.128.0.1` (AirVPN's resolver, which only answers while connected), or turn on Network Lock, which blocks those lookups (and, as above, the containers' network). Programs on the host itself are not affected.
+
 ## Using AirVPN with another WireGuard tool
 
 ```sh
