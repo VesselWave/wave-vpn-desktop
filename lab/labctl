@@ -662,6 +662,11 @@ for s in $(loginctl list-sessions --no-legend | awk '{print $1}'); do
       vt=$(loginctl show-session "$s" -p VTNr --value)
       [ -z "$vt" ] || [ "$vt" = 0 ] || [ "$(cat /sys/class/tty/tty0/active)" = "tty$vt" ] || continue
       pgrep -u "$u" -x gnome-shell >/dev/null && { echo "$s $info"; exit 0; } ;;
+    desktop:*"Active=yes Class=user Name=$u "*"Type=wayland"*|desktop:*"Active=yes Class=user Name=$u "*"Type=x11"*)
+      vt=$(loginctl show-session "$s" -p VTNr --value)
+      [ -z "$vt" ] || [ "$vt" = 0 ] || [ "$(cat /sys/class/tty/tty0/active)" = "tty$vt" ] || continue
+      shell=$(pgrep -u "$u" -l -x 'gnome-shell|plasmashell|cinnamon' | awk 'NR==1{print $2}')
+      [ -n "$shell" ] && { echo "$s $info shell=$shell"; exit 0; } ;;
     session-any:*"Class=user Name=$u "*)
       echo "$s $info"; exit 0 ;;
     greeter:*"Class=greeter"*)
@@ -692,8 +697,8 @@ exit 1
                     result = self.via_ssh(vm['vmid'], 'true', timeout=30)
                     if result is not None and result[0] == 0:
                         return 'ssh ready at %s' % self.load_state(vm['vmid']).get('ip')
-                if what in ('gnome', 'session', 'greeter'):
-                    want = {'gnome': 'session', 'session': 'session-any', 'greeter': 'greeter'}[what]
+                if what in WAIT_SESSIONS:
+                    want = WAIT_SESSIONS[what]
                     script = self.SESSION_CHECK % {'user': shlex.quote(self.cfg.guest_user), 'want': want}
                     rc, out, err, _ = self.guest_run(vm, script, root=True, via='agent', timeout=30)
                     if rc == 0:
@@ -705,13 +710,56 @@ exit 1
         raise LabError('timed out waiting for %s on %s%s' % (what, vm['name'], (': ' + last[-500:]) if last else ''))
 
     # login modes ---------------------------------------------------------
+    DETECT_DM = r'''
+dm=$(basename "$(readlink -f /etc/systemd/system/display-manager.service 2>/dev/null)" .service)
+case $dm in gdm|gdm3|sddm|lightdm) ;; *)
+  dm=; for d in gdm gdm3 sddm lightdm; do systemctl is-active -q "$d" 2>/dev/null && dm=$d; done
+  # openSUSE: display-manager-legacy starts the default-displaymanager alternative.
+  [ -n "$dm" ] || dm=$(basename "$(readlink -f /etc/alternatives/default-displaymanager 2>/dev/null)") ;;
+esac
+case $dm in gdm3) dm=gdm ;; esac
+'''
+
+    def display_manager(self, vm):
+        rc, out, err, _ = self.guest_run(vm, self.DETECT_DM + 'echo "$dm"', root=True, via='agent', timeout=30)
+        dm = out.decode(errors='replace').strip()
+        if rc != 0 or dm not in ('gdm', 'sddm', 'lightdm'):
+            raise LabError('unknown display manager %r' % dm)
+        return dm
+
     def login_mode(self, vm, mode, reboot=False):
-        enable = 'true' if mode == 'autologin' else 'false'
-        script = r'''set -e
-f=/etc/gdm3/custom.conf; [ -d /etc/gdm3 ] || f=/etc/gdm/custom.conf
-printf '[daemon]\nAutomaticLoginEnable=%s\nAutomaticLogin=%s\n\n[security]\n\n[xdmcp]\n\n[chooser]\n\n[debug]\n' > "$f"
-echo "$f: AutomaticLoginEnable=%s"
-''' % (enable, self.cfg.guest_user, enable)
+        on = mode == 'autologin'
+        user = shlex.quote(self.cfg.guest_user)
+        script = 'set -e\n' + self.DETECT_DM + r'''
+on=%(on)d; u=%(user)s
+case $dm in
+gdm)
+  # Debian reads daemon.conf, Ubuntu and Fedora custom.conf.
+  for f in /etc/gdm3/daemon.conf /etc/gdm3/custom.conf /etc/gdm/custom.conf; do [ -e "$f" ] && break; done
+  [ "$on" = 1 ] && v=true || v=false
+  printf '[daemon]\nAutomaticLoginEnable=%%s\nAutomaticLogin=%%s\n\n[security]\n\n[xdmcp]\n\n[chooser]\n\n[debug]\n' "$v" "$u" > "$f"
+  echo "$f: AutomaticLoginEnable=$v" ;;
+sddm)
+  f=/etc/sddm.conf.d/zz-wave-lab-autologin.conf; install -d /etc/sddm.conf.d
+  s=plasma; [ -e /usr/share/wayland-sessions/plasma.desktop ] || s=$(ls /usr/share/wayland-sessions /usr/share/xsessions 2>/dev/null | sed -n 's/\.desktop$//p' | head -n1)
+  if [ "$on" = 1 ]; then printf '[Autologin]\nUser=%%s\nSession=%%s\nRelogin=false\n' "$u" "$s" > "$f"
+  else printf '[Autologin]\nUser=\nSession=\n' > "$f"; fi
+  # openSUSE's display-manager wrapper takes autologin from sysconfig.
+  if [ -w /etc/sysconfig/displaymanager ]; then
+    [ "$on" = 1 ] && a=$u || a=
+    sed -i "s/^DISPLAYMANAGER_AUTOLOGIN=.*/DISPLAYMANAGER_AUTOLOGIN=\"$a\"/" /etc/sysconfig/displaymanager
+  fi
+  echo "$f: autologin=$on session=$s" ;;
+lightdm)
+  f=/etc/lightdm/lightdm.conf.d/90-wave-lab-autologin.conf; install -d /etc/lightdm/lightdm.conf.d
+  [ "$on" = 1 ] && a=$u || a=
+  printf '[Seat:*]\nautologin-user=%%s\nautologin-user-timeout=0\n' "$a" > "$f"
+  # lightdm.conf is read last and would override the drop-in.
+  [ -e /etc/lightdm/lightdm.conf ] && sed -i '/^autologin-user=/d' /etc/lightdm/lightdm.conf
+  echo "$f: autologin-user=$a" ;;
+*) echo "unsupported display manager: $dm" >&2; exit 3 ;;
+esac
+''' % {'on': on, 'user': user}
         rc, out, err, _ = self.guest_run(vm, script, root=True)
         if rc != 0:
             raise LabError('login-mode failed: %s' % err.decode(errors='replace'))
@@ -720,19 +768,28 @@ echo "$f: AutomaticLoginEnable=%s"
             self.qm('reboot', vm['vmid'], '--timeout', 120, timeout=200)
         return out.decode().strip()
 
-    def gdm_login(self, vm, timeout=180):
+    def dm_login(self, vm, timeout=180):
+        """Log in at the greeter (GDM, SDDM or LightDM) by typing the private password."""
         self.wait(vm, 'greeter', timeout=timeout)
-        time.sleep(3)
-        # The greeter starts on the user list; Enter selects the only user.
-        self.keys(vm, ['ret'])
-        time.sleep(2)
+        dm = self.display_manager(vm)
+        time.sleep(5 if dm != 'gdm' else 3)
+        if dm == 'gdm':
+            # The greeter starts on the user list; Enter selects the only user.
+            self.keys(vm, ['ret'])
+            time.sleep(2)
+        # SDDM (Breeze) and LightDM (slick-greeter) preselect the only user with the
+        # password field focused.
         self.type_text(vm, self.cfg.password())
         self.keys(vm, ['ret'])
-        return self.wait(vm, 'gnome', timeout=timeout)
+        return self.wait(vm, 'desktop', timeout=timeout)
+
+    gdm_login = dm_login
 
 
 # --------------------------------------------------------------------------- templates
 
+WAIT_SESSIONS = {'gnome': 'session', 'desktop': 'desktop', 'session': 'session-any', 'greeter': 'greeter'}
+WAIT_TARGETS = ('agent', 'ip', 'ssh') + tuple(WAIT_SESSIONS)
 STAGED_SCRIPT = '/var/tmp/wave-provision.sh'  # guest /tmp is cleared at boot
 DISTROS = {
     'ubuntu2404': {
@@ -762,7 +819,168 @@ DISTROS = {
         'provision': 'templates/fedora-provision.sh',
         'disk': '40G',
     },
+    'debian13': {
+        'name': 'wave-tpl-debian13',
+        # "generic" (standard kernel with DRM/netem), not "genericcloud" (cloud kernel).
+        # Debian publishes an unsigned SHA512SUMS next to the image.
+        'image': 'debian-13-generic-amd64-20261103-2651.qcow2',
+        'url': 'https://cloud.debian.org/images/cloud/trixie/20261103-2651/'
+               'debian-13-generic-amd64-20261103-2651.qcow2',
+        'sha512': '1207e6e3efaff8ee77ab7a32c156a3eea6a9e53f94cfc48efbd1f49ba554ca36'
+                  'ac62ab27395aa813a1775a8c0a393b1a1ce5377d9e5670f6113e3110c57fee4b',
+        'provision': 'templates/debian-provision.sh',
+        'disk': '40G',
+    },
+    'opensuse-tw': {
+        'name': 'wave-tpl-opensuse-tw',
+        # Tumbleweed mirrors keep only the current snapshot; update the pin when it rotates.
+        'image': 'openSUSE-Tumbleweed-Minimal-VM.x86_64-1.0.0-Cloud-Snapshot20261107.qcow2',
+        'url': 'https://download.opensuse.org/tumbleweed/appliances/'
+               'openSUSE-Tumbleweed-Minimal-VM.x86_64-1.0.0-Cloud-Snapshot20261107.qcow2',
+        'sha256': 'caffa34a4111b77ab7bf99d5d1d51c83029e5e280f146c095c02bb11f95da734',
+        # cloud-init prints no host keys here; stop at the getty prompt instead.
+        'serial_until': r'login: ',
+        'provision': 'templates/opensuse-provision.sh',
+        'disk': '40G',
+    },
+    'arch': {
+        'name': 'wave-tpl-arch',
+        'image': 'Arch-Linux-x86_64-cloudimg-20261101.620452.qcow2',
+        'url': 'https://geo.mirror.pkgbuild.com/images/v20261101.620452/'
+               'Arch-Linux-x86_64-cloudimg-20261101.620452.qcow2',
+        'sha256': '794eb4889b39e1f0ed7d5ae998b2a1ed2137db8cf8c3476cf2962c7437ecb003',
+        'provision': 'templates/arch-provision.sh',
+        'disk': '40G',
+    },
 }
+
+
+# Linux Mint has no cloud image: install from the signed live ISO with Ubiquity.
+DISTROS['mint22'] = {
+    'name': 'wave-tpl-mint22',
+    'image': 'linuxmint-22.3-cinnamon-64bit.iso',
+    'url': 'https://mirrors.kernel.org/linuxmint/stable/22.3/linuxmint-22.3-cinnamon-64bit.iso',
+    'sha256': 'a081ab202cfda17f6924128dbd2de8b63518ac0531bcfe3f1a1b88097c459bd4',
+    'installer': 'ubiquity',
+    'preseed': 'templates/mint-preseed.cfg',
+    'provision': 'templates/mint-provision.sh',
+    'disk': '40G',
+}
+
+
+def image_digest(spec):
+    """('sha256'|'sha512', hex) pinned for a distro image."""
+    for algo in ('sha256', 'sha512'):
+        if spec.get(algo):
+            return algo, spec[algo]
+    raise LabError('no pinned checksum for %s' % spec['image'])
+
+
+def cpio_newc(files):
+    """An uncompressed newc cpio archive of (name, bytes) regular files, for appending to an initrd."""
+    out = b''
+    for ino, (name, data, mode) in enumerate(list(files) + [('TRAILER!!!', b'', 0)], 1):
+        raw = name.encode() + b'\0'
+        fields = (ino, mode, 0, 0, 1, 0, len(data), 0, 0, 0, 0, len(raw), 0)
+        rec = b'070701' + ''.join('%08X' % v for v in fields).encode() + raw
+        rec += b'\0' * (-len(rec) % 4) + data + b'\0' * (-len(data) % 4)
+        out += rec
+    return out + b'\0' * (-len(out) % 512)
+
+
+def _ubiquity_install(lab, vmid, name, spec, image, timeout=5400):
+    """Install from an Ubuntu-family live ISO with automatic Ubiquity, then boot the disk.
+
+    The live kernel is booted directly (QEMU -kernel) so the command line can ask
+    for automatic-ubiquity; the preseed rides in an extra cpio appended to the
+    ISO's initrd (casper loads /preseed.cfg from the initramfs). It creates the
+    user with a crypted password and, via success_command, installs openssh-server
+    and the guest agent and authorises the lab key. The working files are removed.
+    """
+    cfg, st, q = lab.cfg, lab.cfg.storage, shlex.quote
+    work = '%s/installer-%d' % (cfg.image_dir, vmid)
+    size_gb = int(spec['disk'].rstrip('G'))
+    lab.qm('set', vmid, '--scsi0', '%s:%d,format=qcow2,discard=on,ssd=1,iothread=1' % (st, size_gb))
+    crypted = lab.host_text('openssl passwd -6 -stdin', input=(cfg.password() + '\n').encode()).strip()
+    if not crypted.startswith('$6$'):
+        raise LabError('could not hash the guest password')
+    pub = cfg.private(cfg.ssh_key + '.pub').read_text().strip()
+    preseed = (LAB_DIR / spec['preseed']).read_text()
+    for key, value in (('@USER@', cfg.guest_user), ('@HOSTNAME@', name), ('@CRYPTED@', crypted),
+                       ('@SSHKEY@', pub)):
+        preseed = preseed.replace(key, value)
+    lab.host('install -d -m 700 %(w)s && isoinfo -i %(i)s -R -x /casper/vmlinuz > %(w)s/vmlinuz && '
+             'isoinfo -i %(i)s -R -x /casper/initrd.lz > %(w)s/initrd && '
+             'test -s %(w)s/vmlinuz && test -s %(w)s/initrd && '
+             'truncate -s %%512 %(w)s/initrd && cat >> %(w)s/initrd' % {'w': q(work), 'i': q(image)},
+             input=cpio_newc([('preseed.cfg', preseed.encode(), 0o100600)]), timeout=300)
+    append = ('boot=casper automatic-ubiquity noprompt quiet splash console=ttyS0,115200 console=tty1 '
+              'debian-installer/locale=en_US.UTF-8 keyboard-configuration/layoutcode=us --')
+    lab.qm('set', vmid, '--ide2', '%s,media=cdrom' % image, '--boot', 'order=scsi0;ide2',
+           '--args', '-kernel %s/vmlinuz -initrd %s/initrd -append %s' % (work, work, q(append)))
+    shots = cfg.dir / 'artifacts'
+    shots.mkdir(exist_ok=True)
+    try:
+        lab.note('installing from %s (automatic Ubiquity; watch with labctl screenshot %d)' % (spec['image'], vmid))
+        lab.qm('start', vmid, timeout=180)
+        vm = {'vmid': vmid, 'name': name}
+        deadline = time.time() + timeout
+        last_shot = 0
+        while lab.status(vmid) == 'running':
+            if time.time() > deadline:
+                raise LabError('installer did not power off within %d s; see %s' % (
+                    timeout, shots / ('%s-installer.png' % name)))
+            if time.time() - last_shot > 60:
+                try:
+                    lab.screenshot(vm, shots / ('%s-installer.png' % name))
+                except LabError:
+                    pass
+                last_shot = time.time()
+            time.sleep(10)
+    finally:
+        lab.qm('set', vmid, '--delete', 'args,ide2', '--boot', 'order=scsi0')
+        lab.host('rm -rf %s' % q(work))
+    lab.note('installed; booting the new system')
+    lab.qm('start', vmid, timeout=180)
+    lab.wait({'vmid': vmid, 'name': name}, 'agent', timeout=600)
+    lab.refresh_ssh(vmid)
+
+
+def _cloud_first_boot(lab, vmid, spec, image):
+    """Import a cloud image, boot it once with Proxmox cloud-init, pin its SSH host key."""
+    cfg, st = lab.cfg, lab.cfg.storage
+    lab.qm('set', vmid, '--scsi0', '%s:0,import-from=%s,format=qcow2,discard=on,ssd=1,iothread=1' % (
+        st, image), timeout=900)
+    lab.qm('resize', vmid, 'scsi0', spec['disk'])
+    pub = cfg.private(cfg.ssh_key + '.pub').read_bytes()
+    keyfile = '/tmp/wave-lab-%d.pub' % vmid
+    lab.host('cat > %s' % keyfile, input=pub)
+    lab.qm('set', vmid, '--ide2', '%s:cloudinit' % st, '--ciuser', cfg.guest_user, '--sshkeys', keyfile,
+           '--ipconfig0', 'ip=dhcp', '--ciupgrade', 0, '--boot', 'order=scsi0')
+    lab.host('rm -f %s' % keyfile)
+    lab.note('first boot (cloud-init); watching the serial console for address and host key')
+    lab.qm('start', vmid, timeout=180)
+    console = lab.helper('serial', vmid, 600, '', spec.get('serial_until', 'END SSH HOST KEY KEYS'), timeout=700,
+                         check=False).stdout.decode(errors='replace')
+    (cfg.state_dir / ('%d-first-boot-console.txt' % vmid)).write_text(console)
+    found = re.findall(r'ci-info: \|\s*(e\w+)\s*\|\s*True\s*\|\s*(\d+\.\d+\.\d+\.\d+)\s*\|', console)
+    key = re.search(r'(ssh-ed25519 [A-Za-z0-9+/=]+)', console.split('BEGIN SSH HOST KEY KEYS')[-1])
+    # Newer cloud-init may print its table before DHCP finishes: look the MAC up instead.
+    ip = found[0][1] if found else lab.neighbor_ip(vmid)
+    if key:
+        lab.pin_host_key(vmid, ip, key.group(1))
+        return
+    # Some images (openSUSE) print no host keys and restrict the guest agent. Trust on
+    # first use from the Proxmox host, which shares the guest's bridge.
+    lab.note('no host key on the serial console; scanning it from the Proxmox host')
+    for _ in range(30):
+        out = lab.host_text('ssh-keyscan -T 5 -t ed25519 %s 2>/dev/null' % shlex.quote(ip), check=False)
+        found_key = re.search(r'(ssh-ed25519 [A-Za-z0-9+/=]+)', out)
+        if found_key:
+            lab.pin_host_key(vmid, ip, found_key.group(1))
+            return
+        time.sleep(10)
+    raise LabError('could not read the SSH host key (serial console or ssh-keyscan)')
 
 
 def template_create(lab, distro, vmid=None, name=None, keep=False):
@@ -776,12 +994,14 @@ def template_create(lab, distro, vmid=None, name=None, keep=False):
         raise LabError('VM ID outside range')
     image = '%s/%s' % (cfg.image_dir, spec['image'])
     q = shlex.quote
+    algo, digest = image_digest(spec)
+    line = q('%s  %s' % (digest, spec['image']))
     lab.note('checking image %s' % spec['image'])
-    lab.host('install -d -m 700 %s && cd %s && (echo %s | sha256sum -c --status - || '
-             '(curl -fsSL --retry 3 -o %s.part %s && mv %s.part %s && echo %s | sha256sum -c -))' % (
-                 q(cfg.image_dir), q(cfg.image_dir), q('%s  %s' % (spec['sha256'], spec['image'])),
-                 q(spec['image']), q(spec['url']), q(spec['image']), q(spec['image']),
-                 q('%s  %s' % (spec['sha256'], spec['image']))), timeout=1800)
+    lab.host('install -d -m 700 %s && cd %s && (echo %s | %ssum -c --status - || '
+             '(curl -fsSL --retry 3 -o %s.part %s && mv %s.part %s && echo %s | %ssum -c -))' % (
+                 q(cfg.image_dir), q(cfg.image_dir), line, algo,
+                 q(spec['image']), q(spec['url']), q(spec['image']), q(spec['image']), line, algo),
+             timeout=1800)
     st = cfg.storage
     lab.note('creating VM %d (%s) on %s' % (vmid, name, st))
     lab.qm('create', vmid, '--name', name, '--tags', cfg.tag, '--memory', cfg.memory_mb, '--cores',
@@ -791,27 +1011,10 @@ def template_create(lab, distro, vmid=None, name=None, keep=False):
            '--serial0', 'socket', '--rng0', 'source=/dev/urandom', '--onboot', 0)
     try:
         lab.qm('set', vmid, '--efidisk0', '%s:1,efitype=4m,pre-enrolled-keys=0,format=qcow2' % st)
-        lab.qm('set', vmid, '--scsi0', '%s:0,import-from=%s,format=qcow2,discard=on,ssd=1,iothread=1' % (
-            st, image), timeout=900)
-        lab.qm('resize', vmid, 'scsi0', spec['disk'])
-        pub = cfg.private(cfg.ssh_key + '.pub').read_bytes()
-        keyfile = '/tmp/wave-lab-%d.pub' % vmid
-        lab.host('cat > %s' % keyfile, input=pub)
-        lab.qm('set', vmid, '--ide2', '%s:cloudinit' % st, '--ciuser', cfg.guest_user, '--sshkeys', keyfile,
-               '--ipconfig0', 'ip=dhcp', '--ciupgrade', 0, '--boot', 'order=scsi0')
-        lab.host('rm -f %s' % keyfile)
-        lab.note('first boot (cloud-init); watching the serial console for address and host key')
-        lab.qm('start', vmid, timeout=180)
-        console = lab.helper('serial', vmid, 600, '', 'END SSH HOST KEY KEYS', timeout=700,
-                             check=False).stdout.decode(errors='replace')
-        (cfg.state_dir / ('%d-first-boot-console.txt' % vmid)).write_text(console)
-        found = re.findall(r'ci-info: \|\s*(e\w+)\s*\|\s*True\s*\|\s*(\d+\.\d+\.\d+\.\d+)\s*\|', console)
-        key = re.search(r'(ssh-ed25519 [A-Za-z0-9+/=]+)', console.split('BEGIN SSH HOST KEY KEYS')[-1])
-        if not key:
-            raise LabError('could not read the SSH host key from the serial console')
-        # Newer cloud-init may print its table before DHCP finishes: look the MAC up instead.
-        ip = found[0][1] if found else lab.neighbor_ip(vmid)
-        lab.pin_host_key(vmid, ip, key.group(1))
+        if spec.get('installer') == 'ubiquity':
+            _ubiquity_install(lab, vmid, name, spec, image)
+        else:
+            _cloud_first_boot(lab, vmid, spec, image)
         vm = {'vmid': vmid, 'name': name}
         lab.wait(vm, 'ssh', timeout=300)
         provision = LAB_DIR / spec['provision']
@@ -827,7 +1030,7 @@ def template_create(lab, distro, vmid=None, name=None, keep=False):
         lab.note('rebooting into the desktop')
         lab.qm('reboot', vmid, '--timeout', 180, timeout=300)
         lab.wait(vm, 'agent', timeout=600)
-        lab.note(lab.wait(vm, 'gnome', timeout=600))
+        lab.note(lab.wait(vm, 'desktop', timeout=600))
         time.sleep(15)
         shot = cfg.dir / 'artifacts' / ('%s-provisioned.png' % name)
         lab.screenshot(vm, shot)
@@ -858,9 +1061,10 @@ def template_seal(lab, vm, distro):
     stale = [k for k in ('ide2', 'ciuser', 'sshkeys', 'ipconfig0', 'ciupgrade') if k in current]
     if stale:
         lab.qm('set', vmid, '--delete', ','.join(stale))
+    algo, digest = image_digest(spec)
     lab.qm('set', vmid, '--cores', cfg.cores, '--description',
-           'Wave lab template %s from %s (sha256 %s), sealed %s' % (
-               distro, spec['image'], spec['sha256'], datetime.date.today().isoformat()))
+           'Wave lab template %s from %s (%s %s), sealed %s' % (
+               distro, spec['image'], algo, digest, datetime.date.today().isoformat()))
     lab.qm('template', vmid, timeout=300)
     lab.forget(vmid)
 
@@ -1024,7 +1228,7 @@ def main(argv=None):
     p.add_argument('--start', action='store_true')
     p = add('start', 'start a VM', 'name')
     p.add_argument('--force', action='store_true', help='ignore max_running')
-    p.add_argument('--wait', choices=['agent', 'ssh', 'gnome'])
+    p.add_argument('--wait', choices=['agent', 'ssh', 'gnome', 'desktop'])
     p = add('stop', 'shut a VM down (forced after the timeout)', 'name')
     p.add_argument('--hard', action='store_true')
     p.add_argument('--timeout', type=int, default=90)
@@ -1072,15 +1276,16 @@ def main(argv=None):
     p.add_argument('--send', default='', help='text to send; escapes like \\r are interpreted')
     p.add_argument('--read', type=float, default=3.0, help='seconds to read')
     p.add_argument('--until', default='', help='stop reading when this regex appears')
-    p = add('wait', 'wait for agent, ip, ssh, greeter, session or gnome', 'name', 'what')
+    p = add('wait', 'wait for agent, ip, ssh, greeter, session, gnome or desktop', 'name', 'what')
     p.add_argument('--timeout', type=int, default=300)
     add('ip', 'print the guest IPv4 address (guest agent)', 'name')
     p = add('ssh', 'interactive SSH session as the guest user', 'name')
-    p = add('login-mode', 'switch GDM between autologin and password login', 'name')
+    p = add('login-mode', 'switch the display manager (GDM, SDDM, LightDM) between autologin and password login', 'name')
     p.add_argument('mode', choices=['autologin', 'password'])
     p.add_argument('--reboot', action='store_true')
-    p = add('gdm-login', 'log in at the GDM greeter by typing the private password', 'name')
-    p.add_argument('--timeout', type=int, default=180)
+    for name in ('dm-login', 'gdm-login'):
+        p = add(name, 'log in at the greeter (GDM, SDDM, LightDM) by typing the private password', 'name')
+        p.add_argument('--timeout', type=int, default=180)
     p = add('build-packages', 'build .deb/.rpm/Arch packages in the builder VM', 'src', 'out')
     p.add_argument('--ref', default='HEAD', help='Git revision to archive (default HEAD)')
     p.add_argument('--worktree', action='store_true', help='tracked files as in the working tree')
@@ -1203,8 +1408,8 @@ def dispatch(lab, args):
         proc = lab.helper('serial', vmid, args.read, args.send, args.until, timeout=args.read + 60)
         sys.stdout.buffer.write(proc.stdout)
     elif cmd == 'wait':
-        if args.what not in ('agent', 'ip', 'ssh', 'greeter', 'session', 'gnome'):
-            raise LabError('wait for one of: agent ip ssh greeter session gnome')
+        if args.what not in WAIT_TARGETS:
+            raise LabError('wait for one of: %s' % ' '.join(WAIT_TARGETS))
         print(lab.wait(vm, args.what, timeout=args.timeout))
     elif cmd == 'ip':
         print(lab.agent_ip(vmid))
@@ -1214,8 +1419,8 @@ def dispatch(lab, args):
         os.execvp('ssh', lab.ssh_args(vmid, ip, tty=not extra, batch=False) + extra)
     elif cmd == 'login-mode':
         print(lab.login_mode(vm, args.mode, reboot=args.reboot))
-    elif cmd == 'gdm-login':
-        print(lab.gdm_login(vm, timeout=args.timeout))
+    elif cmd in ('dm-login', 'gdm-login'):
+        print(lab.dm_login(vm, timeout=args.timeout))
     return 0
 
 

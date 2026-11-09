@@ -370,6 +370,35 @@ class DisplayTests(StubbedHost):
 
 
 class PureFunctionTests(unittest.TestCase):
+    def test_cpio_newc_is_a_valid_appendable_archive(self):
+        data = labctl.cpio_newc([('preseed.cfg', b'abc\n', 0o100600)])
+        self.assertEqual(len(data) % 512, 0)
+        self.assertTrue(data.startswith(b'070701'))
+        fields = [int(data[6 + 8 * i:14 + 8 * i], 16) for i in range(13)]
+        self.assertEqual(fields[1], 0o100600)
+        self.assertEqual(fields[6], 4)
+        self.assertEqual(data[110:110 + fields[11]], b'preseed.cfg\0')
+        body = 110 + fields[11]
+        body += -body % 4
+        self.assertEqual(data[body:body + 4], b'abc\n')
+        self.assertIn(b'TRAILER!!!\0', data)
+
+    def test_every_distro_pins_a_checksum_and_its_scripts_exist(self):
+        for distro, spec in labctl.DISTROS.items():
+            algo, digest = labctl.image_digest(spec)
+            self.assertEqual(len(digest), {'sha256': 64, 'sha512': 128}[algo], distro)
+            self.assertTrue(spec['name'].startswith('wave-tpl-'), distro)
+            self.assertTrue((LAB / spec['provision']).is_file(), distro)
+            if spec.get('installer'):
+                preseed = (LAB / spec['preseed']).read_text()
+                for marker in ('@USER@', '@CRYPTED@', '@SSHKEY@'):
+                    self.assertIn(marker, preseed, distro)
+
+    def test_desktop_wait_accepts_kde_and_cinnamon(self):
+        self.assertEqual(labctl.WAIT_SESSIONS['desktop'], 'desktop')
+        self.assertIn('plasmashell|cinnamon', labctl.Lab.SESSION_CHECK)
+        self.assertIn('Type=x11', labctl.Lab.SESSION_CHECK)
+
     def test_combo_keys(self):
         self.assertEqual([k['data'] for k in labctl.combo_keys('super')], ['meta_l'])
         self.assertEqual([k['data'] for k in labctl.combo_keys('-')], ['minus'])
