@@ -31,7 +31,7 @@ Evidence (outside Git): `.lab/evidence/u2404-retest/` in the private lab directo
 | 6 | B-06 worker kill | **PASS** | Lock on, connected, `kill -9` of the root transport-worker: `wavevpn0` gone and no 18520/18521 rules within 1 s; HTTPS 000, `wave_vpn` table kept, `enabled:true`; banner "The networking worker stopped unexpectedly. Wave removed its tunnel; Network Lock stays as it was.", chip **Blocking traffic**. Lock off: same cleanup within 1 s, HTTPS 200, default route via the physical NIC. The banner outlives Turn off Network Lock (R-03). Evidence `r6-*`. |
 | 7 | B-07 Servers button | **PASS** | Connected via Best to server X with Best selected: "Connected to X" (disabled). Another server Y selected: "Switch to Y"; switch works. Current server selected: "Connected to Y" (disabled); pressing it twice left the transport-worker PID and tunnel unchanged. Evidence `r2-05`, `r2-06`, `r2-12`, `r7-01`. |
 | 8 | B-09/B-13 uninstall | pending | |
-| 9 | B-10 version/args | pending | |
+| 9 | B-10 version/args | **PASS** | `wave-vpn --version` → `wave-vpn 0.1.3`, `wave-vpn-gui --version` → `wave-vpn-gui 0.1.3` (both exit 0). Without a display: `wave-vpn-gui: no graphical display found (WAYLAND_DISPLAY and DISPLAY are not set). Open Wave VPN from your desktop session, or use the wave-vpn command.`, exit 1, no panic. `--bogus`: `unexpected argument '--bogus'` plus usage, exit 2. Neither started a second GUI. Evidence `r9-cli.txt`. |
 | 10 | B-11 idle CPU | pending | |
 | 11 | D-09 sign-in deadline | pending | |
 | 12 | Regression pass | pending | |
