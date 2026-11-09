@@ -51,6 +51,7 @@ REQUIRED = (
     # docs/qa/DISTRO-UBUNTU-2404.md (B-ids); package hooks are covered by
     # scripts/tests/test_packaging_scripts.py.
     'forum_u2404_b01_replaced_helper_executable_is_detected',
+    'forum_u2404_b09_removed_app_says_so_instead_of_offering_setup',
 )
 RESULT = re.compile(r'^test (\S+) \.\.\. (ok|FAILED|ignored)\b')
 STATUS = {'ok': 'passed', 'FAILED': 'failed', 'ignored': 'skipped'}

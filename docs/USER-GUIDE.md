@@ -74,7 +74,7 @@ sudo pacman -R wave-vpn        # Arch, CachyOS
 sudo wave-vpn-uninstall        # tarball install
 ```
 
-Uninstalling first disconnects, turns off Network Lock and removes the networking helper, its systemd units and the boot lock, so you're never left offline without the app. It keeps your preferences in `~/.config/wave-vpn` and leaves dependency packages alone. Releases before 0.1.2 were uninstalled with `sudo bash wave-vpn-0.1.x/scripts/install.sh uninstall` from their source folder.
+Uninstalling first closes any open Wave VPN window, disconnects, turns off Network Lock and removes the networking helper, its systemd units and the boot lock, so you're never left offline without the app. It leaves dependency packages alone and keeps your preferences in `~/.config/wave-vpn`, even with `apt purge`: the package doesn't touch files in home folders. Those preferences include your Network Lock choice, so if you reinstall, the lock comes back on with your next Connect. To start fresh, delete `~/.config/wave-vpn` (sign out first to remove the saved account from your keyring). Releases before 0.1.2 were uninstalled with `sudo bash wave-vpn-0.1.x/scripts/install.sh uninstall` from their source folder.
 
 ## Scope
 

@@ -498,3 +498,21 @@ fn forum_copy_error_banner_capitalizes_network_lock() {
     let error = app.error.take().unwrap();
     assert!(error.contains("Network Lock remains active"), "{error}");
 }
+
+// U2404 B-09: a window left running after the package was removed says so
+// instead of offering first-time helper setup or developer wording.
+#[test]
+fn forum_u2404_b09_removed_app_says_so_instead_of_offering_setup() {
+    let mut app = app();
+    app.test_removed = Some(true);
+    app.test_helper = Some(false);
+    app.protection_known = false;
+    let note = app.protection_note().unwrap();
+    assert!(note.contains("uninstalled"), "{note}");
+    assert!(!note.contains("first time you connect"), "{note}");
+    running(&mut app, "Achernar");
+    end(&mut app, APP_REMOVED);
+    let error = app.error.clone().unwrap();
+    assert!(error.contains("uninstalled"), "{error}");
+    assert!(app.retry_at.is_none());
+}

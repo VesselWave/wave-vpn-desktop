@@ -171,6 +171,8 @@ EOF
     ;;
 uninstall)
     if [[ -z "$stage" ]]; then
+        # Running windows could only offer to connect through a removed helper.
+        pkill -x wave-vpn-gui 2> /dev/null || true
         teardown
     fi
     for path in /usr/local/bin /usr/local/share/applications /usr/local/share/doc/wave-vpn /usr/local/share/icons/hicolor/scalable/apps; do check_dir "$stage$path"; done

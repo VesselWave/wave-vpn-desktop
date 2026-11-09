@@ -261,6 +261,9 @@ struct Wave {
     /// actions with their input instead of running them.
     #[cfg(test)]
     test_helper: Option<bool>,
+    /// Tests: pretend the package was (not) removed under the running app.
+    #[cfg(test)]
+    test_removed: Option<bool>,
     #[cfg(test)]
     test_privileged: Vec<(&'static str, wave_protocol::transport::LockInput)>,
     /// Tests: record each sign-in's Cancel flag instead of starting a request.
@@ -355,6 +358,8 @@ impl Wave {
             lock_installed: false,
             #[cfg(test)]
             test_helper: None,
+            #[cfg(test)]
+            test_removed: None,
             #[cfg(test)]
             test_privileged: vec![],
             #[cfg(test)]
@@ -1482,7 +1487,9 @@ impl Wave {
     /// is blocked and how to restore it.
     fn protection_note(&self) -> Option<&'static str> {
         if !self.protection_known {
-            Some(if self.helper_missing() {
+            Some(if self.app_removed() {
+                APP_REMOVED
+            } else if self.helper_missing() {
                 HELPER_MISSING
             } else {
                 "Protection status is unavailable. No protection claim is made until the networking service confirms it."
@@ -1518,6 +1525,16 @@ impl Wave {
             return !available;
         }
         !self.preview && !wave_protocol::service::available()
+    }
+    /// The package was removed while this window kept running: the
+    /// `wave-vpn` command beside it is gone.
+    fn app_removed(&self) -> bool {
+        #[cfg(test)]
+        if let Some(removed) = self.test_removed {
+            return removed;
+        }
+        !self.preview
+            && std::env::current_exe().is_ok_and(|exe| !exe.with_file_name("wave-vpn").is_file())
     }
     /// Why the target matches no available server, naming it.
     fn no_server_reason(&self) -> String {
@@ -1876,6 +1893,7 @@ const KEEPING_SERVERS: &str = "Keeping the current server list";
 const EXEMPTION_RETRY_MIN: Duration = Duration::from_secs(30);
 const EXEMPTION_RETRY_MAX: Duration = Duration::from_secs(15 * 60);
 const HELPER_OUTDATED: &str = "Network Lock could not follow AirVPN's updated bootstrap addresses. The installed networking helper may be older than this app: reinstall it with the installer (sudo bash scripts/install.sh install), then reopen Wave VPN. Wave retries automatically.";
+const APP_REMOVED: &str = "Wave VPN's networking command (wave-vpn) is missing, so Wave VPN was probably uninstalled. Reinstall it to connect, or quit this window.";
 const HELPER_MISSING: &str = "The networking helper isn't installed yet, so protection status is unknown. Wave sets it up with one administrator prompt the first time you connect or change Network Lock.";
 const HELPER_SETUP_REFUSED: &str = "Wave needs one administrator authorization to install its networking helper, and it was declined or unavailable. Press Connect again and approve the system prompt, or run sudo wave-vpn service-install in a terminal.";
 const HELPER_OTHER_USER: &str = "The networking helper is authorized for a different desktop user. To use Wave VPN from this account, run sudo wave-vpn service-install here.";
@@ -1916,10 +1934,7 @@ fn launch_transport(
     tx: mpsc::Sender<Event>,
 ) -> anyhow::Result<()> {
     let executable = std::env::current_exe()?.with_file_name("wave-vpn");
-    anyhow::ensure!(
-        executable.is_file(),
-        "Build/install wave-vpn beside the GUI"
-    );
+    anyhow::ensure!(executable.is_file(), APP_REMOVED);
     let mut child =
         wave_protocol::service::command_cancellable(&executable, "transport-worker", || {
             control.lock().unwrap().cancelled

@@ -83,6 +83,28 @@ class Hooks(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual([], [c for c in calls if c.startswith('wave-vpn')])
 
+    # B-09: removal must not leave a running GUI that offers to connect
+    # through a helper that no longer exists.
+    def test_u2404_b09_removal_closes_running_wave_windows(self):
+        self.authorize()
+        self.connect()
+        result, calls = self.run_hook('preremove.sh', 'remove')
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn('wave-vpn lock-disable', calls)
+        self.assertIn('wave-vpn service-uninstall', calls)
+        self.assertIn('pkill -x wave-vpn-gui', calls)
+        # B-13: the saved preferences survive; say so instead of implying
+        # Network Lock is gone for good.
+        self.assertIn('~/.config/wave-vpn', result.stdout)
+
+    def test_upgrade_keeps_everything(self):
+        self.authorize()
+        self.connect()
+        for argument in ('upgrade', '1'):
+            result, calls = self.run_hook('preremove.sh', argument)
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual([], calls)
+
 
 if __name__ == '__main__':
     unittest.main()
