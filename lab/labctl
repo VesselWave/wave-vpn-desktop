@@ -916,8 +916,12 @@ def _ubiquity_install(lab, vmid, name, spec, image, timeout=5400):
              input=cpio_newc([('preseed.cfg', preseed.encode(), 0o100600)]), timeout=300)
     append = ('boot=casper automatic-ubiquity noprompt quiet splash console=ttyS0,115200 console=tty1 '
               'debian-installer/locale=en_US.UTF-8 keyboard-configuration/layoutcode=us --')
-    lab.qm('set', vmid, '--ide2', '%s,media=cdrom' % image, '--boot', 'order=scsi0;ide2',
-           '--args', '-kernel %s/vmlinuz -initrd %s/initrd -append %s' % (work, work, q(append)))
+    # The ISO is not on an ISO-capable storage, so attach it read-only as a CD on the
+    # q35 chipset's built-in AHCI controller through args, next to the direct kernel boot.
+    lab.qm('set', vmid, '--boot', 'order=scsi0', '--args',
+           '-kernel %s/vmlinuz -initrd %s/initrd -append %s '
+           '-drive file=%s,if=none,id=wavecd,media=cdrom,readonly=on,format=raw '
+           '-device ide-cd,bus=ide.4,drive=wavecd' % (work, work, q(append), image))
     shots = cfg.dir / 'artifacts'
     shots.mkdir(exist_ok=True)
     try:
@@ -938,7 +942,7 @@ def _ubiquity_install(lab, vmid, name, spec, image, timeout=5400):
                 last_shot = time.time()
             time.sleep(10)
     finally:
-        lab.qm('set', vmid, '--delete', 'args,ide2', '--boot', 'order=scsi0')
+        lab.qm('set', vmid, '--delete', 'args', '--boot', 'order=scsi0')
         lab.host('rm -rf %s' % q(work))
     lab.note('installed; booting the new system')
     lab.qm('start', vmid, timeout=180)
