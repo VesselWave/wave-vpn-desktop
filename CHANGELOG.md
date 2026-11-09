@@ -14,6 +14,9 @@
   - Sign-in gives up after 45 seconds with a clear message instead of trying every address for minutes, and offers **Cancel** while signing in, including when restoring the saved account at startup; Cancel shows no error and keeps the saved account (same behavior as Android)
   - `scripts/check-forum.py` runs the named offline contracts and writes `target/forum/contracts.json`
 
+- Ubuntu 24.04 distribution test fixes ([report](docs/qa/DISTRO-UBUNTU-2404.md)):
+  - A package upgrade while connected now updates the networking helper at once without dropping the connection, instead of leaving the old helper in place until someone ran `sudo wave-vpn service-install`; a replaced helper restarts itself once idle (B-01)
+
 ## 0.1.3 · 2026-11-05 · early release
 
 Lighter on AirVPN's infrastructure, following [AirVPN Staff feedback](https://airvpn.org/forums/topic/82017-wave-vpn-open-source-wireguard-client-for-android-and-linux-unofficial-v011/?do=findComment&comment=268064). [Release notes](docs/RELEASE-v0.1.3.md).

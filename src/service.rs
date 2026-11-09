@@ -190,10 +190,13 @@ mod linux {
             Path::new("/run/systemd/system").is_dir(),
             "Networking service requires systemd"
         );
-        ensure!(
-            !Path::new("/run/wave-vpn/recovery.json").exists(),
-            "Disconnect the VPN before updating the networking service"
-        );
+        // A package upgrade may run while connected. Replacing the helper file
+        // is safe then: the running broker and worker keep the old executable
+        // and only the next connection starts the new one. Stopping the
+        // service would kill the worker and drop the tunnel, so skip that and
+        // let the broker restart itself once idle (see `serve`). The recovery
+        // record must therefore stay readable by the next release.
+        let connected = Path::new("/run/wave-vpn/recovery.json").exists();
         let uid = uid
             .or_else(|| {
                 std::env::var("SUDO_UID")
@@ -211,7 +214,7 @@ mod linux {
             trusted(Path::new(directory))?;
         }
         fs::set_permissions("/etc/wave-vpn", fs::Permissions::from_mode(0o700))?;
-        if Path::new(SOCKET_UNIT).exists() {
+        if Path::new(SOCKET_UNIT).exists() && !connected {
             systemctl(&[
                 "stop",
                 "wave-vpn-service.socket",
@@ -224,7 +227,14 @@ mod linux {
         atomic(SERVICE_UNIT, b"[Unit]\nDescription=Wave VPN networking service\nRequires=wave-vpn-service.socket\nAfter=wave-vpn-service.socket\n[Service]\nExecStart=/usr/local/libexec/wave-vpn-helper service-serve\nUser=root\nUMask=0077\nNoNewPrivileges=true\nProtectHome=true\nPrivateTmp=true\nKillMode=control-group\nTimeoutStopSec=30\nRestart=on-failure\n", 0o644)?;
         systemctl(&["daemon-reload"])?;
         systemctl(&["enable", "--now", "wave-vpn-service.socket"])?;
-        println!("Networking service installed. Future VPN actions need no password.");
+        if connected {
+            println!(
+                "Networking service updated. The current connection keeps running; \
+                 the next connection uses the new helper."
+            );
+        } else {
+            println!("Networking service installed. Future VPN actions need no password.");
+        }
         Ok(())
     }
     pub fn uninstall() -> Result<()> {
@@ -378,8 +388,34 @@ mod linux {
             "Unable to protect listening socket"
         );
         let active = Arc::new(AtomicUsize::new(0));
-        for connection in listener.incoming() {
-            let mut stream = connection?;
+        loop {
+            // Wake every few seconds while idle: after a package upgrade has
+            // replaced this executable, exit once no request is in flight.
+            // Unaccepted connections stay queued on the systemd socket, which
+            // starts the new helper for them.
+            let mut poll = libc::pollfd {
+                fd: listener.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            let ready = unsafe { libc::poll(&mut poll, 1, 5000) };
+            if ready < 0 {
+                let error = std::io::Error::last_os_error();
+                if error.kind() == std::io::ErrorKind::Interrupted {
+                    continue;
+                }
+                return Err(error.into());
+            }
+            if ready == 0 {
+                if active.load(Ordering::Acquire) == 0
+                    && fs::read_link("/proc/self/exe")
+                        .is_ok_and(|path| super::executable_replaced(&path))
+                {
+                    return Ok(());
+                }
+                continue;
+            }
+            let (mut stream, _) = listener.accept()?;
             // Bound even rejection writes before processing untrusted peers.
             stream.set_write_timeout(Some(Duration::from_secs(1)))?;
             // Authenticate peer UID before reserving bounded worker slots.
@@ -435,7 +471,6 @@ mod linux {
                 active.fetch_sub(1, Ordering::AcqRel);
             });
         }
-        Ok(())
     }
     pub fn client(action: &str) -> Result<()> {
         ensure!(allowed(action), "Unsupported service action");
@@ -471,6 +506,11 @@ mod linux {
         }
         anyhow::bail!("Networking service connection was lost")
     }
+}
+/// Linux shows an executable that was replaced or removed after it started
+/// as "<path> (deleted)" in /proc/self/exe.
+pub fn executable_replaced(path: &Path) -> bool {
+    path.to_string_lossy().ends_with(" (deleted)")
 }
 #[cfg(target_os = "linux")]
 pub use linux::{client, install, serve, uninstall};

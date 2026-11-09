@@ -48,6 +48,9 @@ REQUIRED = (
     'forum_d11_manifest_without_wireguard_modes_is_rejected',
     'forum_d11_malformed_wireguard_mode_is_skipped_not_fatal',
     'forum_copy_error_banner_capitalizes_network_lock',
+    # docs/qa/DISTRO-UBUNTU-2404.md (B-ids); package hooks are covered by
+    # scripts/tests/test_packaging_scripts.py.
+    'forum_u2404_b01_replaced_helper_executable_is_detected',
 )
 RESULT = re.compile(r'^test (\S+) \.\.\. (ok|FAILED|ignored)\b')
 STATUS = {'ok': 'passed', 'FAILED': 'failed', 'ignored': 'skipped'}

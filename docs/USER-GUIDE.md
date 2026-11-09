@@ -63,7 +63,7 @@ The file is created with mode 0600 and contains your private key. Keep it privat
 
 ## Upgrading and uninstalling
 
-**Upgrade** by installing the new release the same way you installed the old one: the new package with your package manager, or `./install.sh` from the new tarball. Preferences are kept and the networking helper is updated too. Disconnect first: the tarball installer refuses to run while connected, and a package installed while connected asks you to run `sudo wave-vpn service-install` once you disconnect.
+**Upgrade** by installing the new release the same way you installed the old one: the new package with your package manager, or `./install.sh` from the new tarball. Preferences are kept and the networking helper is updated too. A package upgrade while connected updates the helper right away and leaves the connection running; the next connection uses the new helper. The tarball installer refuses to run while connected, so disconnect first.
 
 **Uninstall** with the method you installed with:
 
