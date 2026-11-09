@@ -238,3 +238,43 @@ fn forum_r2_n05_gui_with_a_missing_wayland_socket_exits_cleanly() {
     assert!(error.contains("display"), "{error}");
     assert!(!error.contains("panicked"), "{error}");
 }
+
+// Final round F-01: Ubuntu 26.04's AppArmor profile for wg only lets it open
+// files under /etc/wireguard, so `wg setconf wavevpn0 /run/wave-vpn/…` failed
+// with "fopen: Permission denied" and nothing connected. The configuration is
+// passed on standard input instead (the file stays as the session marker).
+#[test]
+fn forum_final_f01_wg_reads_its_configuration_from_stdin() {
+    let source = include_str!("../src/platform/linux.rs");
+    assert!(
+        source.contains(r#""setconf", IFACE, "/dev/stdin"]"#),
+        "wg setconf must read the configuration from stdin"
+    );
+    assert!(!source.contains(r#""setconf", IFACE, CONFIG]"#));
+}
+
+// Final round F-02: a stale WAYLAND_DISPLAY with DISPLAY also set still made
+// winit panic, because it tried the missing Wayland socket first. The stale
+// value is dropped so X11 is used; with no X server either, that is an
+// ordinary error, never a panic.
+#[cfg(target_os = "linux")]
+#[test]
+fn forum_final_f02_stale_wayland_socket_falls_back_to_x11() {
+    use std::process::{Command, Stdio};
+    let runtime = std::env::temp_dir().join(format!("wave-f02-{}", std::process::id()));
+    std::fs::create_dir_all(&runtime).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_wave-vpn-gui"))
+        .env_remove("WAYLAND_SOCKET")
+        .env_remove("WAVE_PREVIEW")
+        .env("WAYLAND_DISPLAY", "wayland-missing")
+        .env("XDG_RUNTIME_DIR", &runtime)
+        .env("DISPLAY", ":97")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&runtime);
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert_ne!(output.status.code(), Some(101), "{error}");
+    assert!(!error.contains("panicked"), "{error}");
+    assert!(!error.to_lowercase().contains("wayland"), "{error}");
+}

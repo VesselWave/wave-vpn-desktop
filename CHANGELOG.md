@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Connecting works on Ubuntu 26.04: WireGuard's configuration is passed on standard input because Ubuntu's AppArmor profile for wg only allows files under /etc/wireguard (final round F-01)
+- A stale Wayland display setting with X11 available now opens the window on X11 instead of crashing (final round F-02)
 - The saved account is found on desktops whose keyring service runs without D-Bus activation, such as KWallet on openSUSE, instead of falling back to plain-text storage (R2 N-03)
 - A stale Wayland display setting gives the clear no-display message instead of a crash (R2 N-05)
 - Upgrading while connected no longer drops the VPN on Ubuntu and Debian: the package tells needrestart not to restart the networking service, which restarts itself once idle instead (U2404 R-01)

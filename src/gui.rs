@@ -2271,7 +2271,7 @@ fn main() -> iced::Result {
     }
     // winit panics without a usable display; say what is wrong instead.
     #[cfg(target_os = "linux")]
-    if !display_available() {
+    if !prepare_display() {
         eprintln!(
             "wave-vpn-gui: no graphical display found (no Wayland socket and DISPLAY is not set). \
              Open Wave VPN from your desktop session, or use the wave-vpn command."
@@ -2574,15 +2574,17 @@ mod forum_gui_cases;
 #[path = "../tests/support/staff_gui_cases.rs"]
 mod staff_gui_cases;
 
-/// A Wayland socket that exists, an inherited Wayland socket fd, or an X11
-/// DISPLAY. A stale WAYLAND_DISPLAY whose socket is gone made winit panic.
+/// Whether a usable display exists: an inherited Wayland socket, a Wayland
+/// socket that exists, or an X11 DISPLAY. A stale WAYLAND_DISPLAY whose socket
+/// is gone made winit panic even with DISPLAY set, so it is dropped here and
+/// X11 is used instead. Runs first thing in main, before any thread starts.
 #[cfg(target_os = "linux")]
-fn display_available() -> bool {
+fn prepare_display() -> bool {
     let set = |name: &str| std::env::var_os(name).filter(|value| !value.is_empty());
-    if set("WAYLAND_SOCKET").is_some() || set("DISPLAY").is_some() {
+    if set("WAYLAND_SOCKET").is_some() {
         return true;
     }
-    set("WAYLAND_DISPLAY").is_some_and(|display| {
+    let wayland = set("WAYLAND_DISPLAY").is_some_and(|display| {
         let path = std::path::PathBuf::from(&display);
         if path.is_absolute() {
             path.exists()
@@ -2590,5 +2592,13 @@ fn display_available() -> bool {
             set("XDG_RUNTIME_DIR")
                 .is_some_and(|runtime| std::path::Path::new(&runtime).join(path).exists())
         }
-    })
+    });
+    if wayland {
+        return true;
+    }
+    if set("DISPLAY").is_some() {
+        std::env::remove_var("WAYLAND_DISPLAY");
+        return true;
+    }
+    false
 }

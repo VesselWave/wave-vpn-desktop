@@ -480,7 +480,10 @@ fn configure(r: &Request, touched: &mut bool) -> Result<()> {
         None,
     )?;
     unmanage_link();
-    run("wg", &["setconf", IFACE, CONFIG], None)?;
+    // Standard input, not the path: Ubuntu 26.04's AppArmor profile for wg
+    // only allows files under /etc/wireguard. The file stays as the marker.
+    let config = zeroize::Zeroizing::new(std::fs::read(CONFIG)?);
+    run("wg", &["setconf", IFACE, "/dev/stdin"], Some(&config))?;
     for address in &p.addresses {
         run(
             "ip",

@@ -66,6 +66,7 @@ REQUIRED = (
     'forum_u2404_b18_locked_keyring_offers_retry_instead_of_looking_signed_out',
     'forum_u2404_b18_locked_item_is_told_apart_from_no_item',
     'forum_r2_n03_running_secret_service_counts_without_activation',
+    'forum_final_f01_wg_reads_its_configuration_from_stdin',
     'forum_u2404_b19_second_launch_shows_the_first_window',
     'forum_u2404_b19_stale_socket_after_a_crash_is_replaced',
     'forum_u2404_b20_no_desktop_preference_follows_light',
