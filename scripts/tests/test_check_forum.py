@@ -54,7 +54,8 @@ class ForumReportTest(unittest.TestCase):
     def test_every_required_contract_exists_in_the_rust_sources(self):
         root = Path(__file__).resolve().parents[2]
         sources = ''.join((root / path).read_text() for path in (
-            'tests/forum_contracts.rs', 'tests/distro_regressions.rs', 'tests/support/forum_gui_cases.rs'))
+            'tests/forum_contracts.rs', 'tests/distro_regressions.rs', 'tests/support/forum_gui_cases.rs',
+            'src/instance.rs'))
         for name in module.REQUIRED:
             self.assertIn(f'fn {name}()', sources)
 
