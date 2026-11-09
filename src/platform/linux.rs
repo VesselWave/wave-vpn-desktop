@@ -434,6 +434,7 @@ fn configure(r: &Request, touched: &mut bool) -> Result<()> {
         &["link", "add", "dev", IFACE, "type", "wireguard"],
         None,
     )?;
+    unmanage_link();
     run("wg", &["setconf", IFACE, CONFIG], None)?;
     for address in &p.addresses {
         run(
@@ -563,6 +564,36 @@ fn configure(r: &Request, touched: &mut bool) -> Result<()> {
     }
     cache_services(o)?;
     Ok(())
+}
+/// Keep NetworkManager away from the tunnel link, before it has addresses or
+/// is up. Otherwise NetworkManager adopts it as an external connection and,
+/// when Wave deletes it on every Disconnect, switch or retry, GNOME reports
+/// "Connection failed". Unmanaged, the link is never activated and its DNS
+/// settings are left to Wave. Best effort: NetworkManager may be absent or
+/// may not have seen the new link yet, so retry only "not found" briefly.
+fn unmanage_link() {
+    let Ok(nmcli) = tool("nmcli") else {
+        return;
+    };
+    for _ in 0..10 {
+        let Ok(output) = crate::process::output(
+            Command::new(&nmcli)
+                .arg0("nmcli")
+                .env_clear()
+                .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
+                .env("LC_ALL", "C")
+                .args(["device", "set", IFACE, "managed", "no"]),
+            None,
+            Duration::from_secs(5),
+        ) else {
+            return;
+        };
+        if output.status.success() || !String::from_utf8_lossy(&output.stderr).contains("not found")
+        {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 fn cleanup(o: &Options, retain: bool, bootstrap: &[Exemption]) -> Result<()> {
     let configured_lock = lock_config()?;
