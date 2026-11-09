@@ -62,6 +62,8 @@ REQUIRED = (
     'forum_u2404_b14_lost_network_lock_is_reported_and_restored',
     'forum_u2404_b14_saved_choice_says_the_lock_returns_on_connect',
     'forum_u2404_b14_lock_loss_needs_wave_state_and_a_missing_table',
+    'forum_u2404_b19_second_launch_shows_the_first_window',
+    'forum_u2404_b19_stale_socket_after_a_crash_is_replaced',
     'forum_u2404_b22_foreign_resolv_conf_is_reasserted',
     'forum_u2404_b22_recover_keeps_a_resolver_changed_outside_wave',
     'forum_u2404_b22_networkmanager_leaves_resolv_conf_alone_during_a_session',

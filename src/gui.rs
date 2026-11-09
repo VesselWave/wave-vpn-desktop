@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Fresh controller and views. The archived app is used only as a behavior/visual reference.
 mod icons;
+mod instance;
 mod preferences;
 mod preview;
 mod theme;
@@ -170,6 +171,8 @@ fn wakeups() -> impl iced::futures::Stream<Item = Message> {
 }
 const LOCK_REMOVED_RESTORED: &str = "Network Lock was removed by another program (for example a firewall reload or `nft flush ruleset`). Wave turned it back on, as you chose.";
 const LOCK_REMOVED_OFF: &str = "Network Lock was removed by another program (for example a firewall reload or `nft flush ruleset`). Traffic is not blocked; turn it on again in Settings if you want it.";
+/// This process's single-instance claim, served once the UI can show itself.
+static PRIMARY: Mutex<Option<instance::Primary>> = Mutex::new(None);
 /// Drives timers (deadlines, retries, status queries) and the uptime display;
 /// events do not wait for it.
 const IDLE_TICK: Duration = Duration::from_secs(1);
@@ -429,6 +432,13 @@ impl Wave {
                         .to_owned()
                 });
                 let _ = tx.send(Event::StorageLoaded(epoch, storage, loaded));
+            });
+        }
+        if let Some(primary) = PRIMARY.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            // A second launch raises this window, also when hidden in the tray.
+            let tx = app.sender.clone();
+            primary.serve(move || {
+                let _ = tx.send(Event::Tray(tray::Action::Show));
             });
         }
         let tx = app.sender.clone();
@@ -2211,6 +2221,27 @@ fn main() -> iced::Result {
              Open Wave VPN from your desktop session, or use the wave-vpn command."
         );
         std::process::exit(1);
+    }
+    if std::env::var_os("WAVE_PREVIEW").is_none() {
+        match instance::claim(&instance::directory()) {
+            Ok(instance::Instance::Primary(primary)) => {
+                *PRIMARY.lock().unwrap_or_else(|e| e.into_inner()) = Some(primary);
+            }
+            Ok(instance::Instance::Existing { shown }) => {
+                eprintln!(
+                    "{}",
+                    if shown {
+                        "Wave VPN is already running; showed its window."
+                    } else {
+                        "Wave VPN is already running. Open it from its tray icon, or quit it before starting it again."
+                    }
+                );
+                return Ok(());
+            }
+            Err(error) => {
+                eprintln!("wave-vpn-gui: could not check for another running Wave VPN ({error})")
+            }
+        }
     }
     iced::daemon(Wave::boot, Wave::update, Wave::view)
         .title(|_app: &Wave, _id| {

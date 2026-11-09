@@ -85,7 +85,10 @@ fn exclusive() -> Result<File> {
         .read(true)
         .write(true)
         .open(format!("{DIR}/worker.lock"))?;
-    fs2::FileExt::try_lock_exclusive(&file).context("Another networking operation is running")?;
+    // No raw "os error 11": say what to do.
+    fs2::FileExt::try_lock_exclusive(&file).map_err(|_| {
+        anyhow::anyhow!("Another networking operation is running. Wait for it to finish, or quit the other Wave VPN window, then try again")
+    })?;
     Ok(file)
 }
 fn atomic(path: impl AsRef<Path>, bytes: &[u8]) -> Result<()> {

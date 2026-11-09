@@ -781,7 +781,10 @@ fn forum_u2404_b14_saved_choice_says_the_lock_returns_on_connect() {
     app.prefs.options.set("netlock", "true".into());
     app.transport_line(r#"{"event":"protection","enabled":false}"#.into());
     let text = crate::views::network_lock_summary(&app);
-    assert!(text.contains("turns it on again when you connect"), "{text}");
+    assert!(
+        text.contains("turns it on again when you connect"),
+        "{text}"
+    );
     app.prefs.options.set("netlock", "false".into());
     assert!(!crate::views::network_lock_summary(&app).contains("connect"));
 }
