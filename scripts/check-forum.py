@@ -64,6 +64,7 @@ REQUIRED = (
     'forum_u2404_b14_lock_loss_needs_wave_state_and_a_missing_table',
     'forum_u2404_b19_second_launch_shows_the_first_window',
     'forum_u2404_b19_stale_socket_after_a_crash_is_replaced',
+    'forum_u2404_b20_no_desktop_preference_follows_light',
     'forum_u2404_b21_country_list_uses_names_plurals_and_name_order',
     'forum_u2404_b22_foreign_resolv_conf_is_reasserted',
     'forum_u2404_b22_recover_keeps_a_resolver_changed_outside_wave',

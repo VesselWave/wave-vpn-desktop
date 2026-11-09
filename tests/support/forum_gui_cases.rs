@@ -810,3 +810,16 @@ fn forum_u2404_b21_country_list_uses_names_plurals_and_name_order() {
         .collect();
     assert_eq!(names, ["Austria", "Canada", "Czechia", "Switzerland"]);
 }
+
+// U2404 B-20: GNOME's Light style sets color-scheme 'default', which the
+// portal reports as "no preference"; Wave stayed dark instead of light.
+#[test]
+fn forum_u2404_b20_no_desktop_preference_follows_light() {
+    let mut app = app();
+    let _ = app.update(Message::SystemTheme(iced::theme::Mode::Dark));
+    assert!(app.system_dark);
+    let _ = app.update(Message::SystemTheme(iced::theme::Mode::None));
+    assert!(!app.system_dark);
+    let _ = app.update(Message::SystemTheme(iced::theme::Mode::Light));
+    assert!(!app.system_dark);
+}

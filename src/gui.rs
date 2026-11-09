@@ -1304,9 +1304,9 @@ impl Wave {
             }
             Message::Resize(size) => self.width = size.width,
             Message::SystemTheme(mode) => {
-                if mode != iced::theme::Mode::None {
-                    self.system_dark = mode == iced::theme::Mode::Dark;
-                }
+                // "No preference" (GNOME's color-scheme 'default', Ubuntu's
+                // Light style) means light, as GTK and libadwaita read it.
+                self.system_dark = mode == iced::theme::Mode::Dark;
             }
             Message::Capture(s) => {
                 preview::save(self, s);
