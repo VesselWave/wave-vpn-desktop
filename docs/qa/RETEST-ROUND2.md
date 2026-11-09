@@ -1,6 +1,6 @@
 # Round 2 re-test: B-14 to B-22 and R-01 on Ubuntu, Debian and openSUSE
 
-> **In short:** status: in progress (Ubuntu 24.04 complete). Re-test of the second batch of fixes from [DISTRO-UBUNTU-2404.md](DISTRO-UBUNTU-2404.md) (B-14 to B-22) and [DISTRO-UBUNTU-2404-RETEST.md](DISTRO-UBUNTU-2404-RETEST.md) (R-01) on disposable guests with a live AirVPN account. Ubuntu 24.04: every fix PASSES. New: N-01 (an upgrade from the published 0.1.3 while connected keeps the old networking helper until reboot, because the 0.1.3 broker has no idle restart) and N-02 (once, the GNOME session ended right after installing the package on a freshly booted guest, as already seen once in the first round).
+> **In short:** status: in progress (Ubuntu 24.04 and Debian 13 complete). Re-test of the second batch of fixes from [DISTRO-UBUNTU-2404.md](DISTRO-UBUNTU-2404.md) (B-14 to B-22) and [DISTRO-UBUNTU-2404-RETEST.md](DISTRO-UBUNTU-2404-RETEST.md) (R-01) on disposable guests with a live AirVPN account. Ubuntu 24.04 and Debian 13: every fix PASSES, including B-22 on Debian's plain resolv.conf (re-activations, NetworkManager restart, crash + Recover). New: N-01 (an upgrade from the published 0.1.3 while connected keeps the old networking helper until reboot, because the 0.1.3 broker has no idle restart) and N-02 (once, the GNOME session ended right after installing the package on a freshly booted guest, as already seen once in the first round).
 
 Date: 2026-11-09. Tester: round-2 test agent. Line numbers refer to `0a3697a`.
 
@@ -43,6 +43,22 @@ Template `wave-tpl-ubuntu2404` (stock needrestart `3.6-7ubuntu4.5`, NetworkManag
 | U16 | B-20: Appearance Light/Dark | **PASS** | `color-scheme` `default` → Wave light; `prefer-dark` → Wave dark, both followed live. Evidence `u-b20-light.png`, `u-b20-b21-dark-servers.png`. |
 | U17 | B-21: server list copy | **PASS** | Countries: "1 server" (Brazil), "Czechia" by name, ordered by name (Canada, Czechia …). Evidence `u-b21-countries.png`. |
 | U18 | B-15: ufw deny outgoing | **PASS** | `ufw default deny outgoing; allow out 53; enable`, Connect: attempts 1 and 2 show "First WireGuard handshake timed out"; from attempt 3 the banner and Logs add "No reply from the server after N attempts: a firewall on this computer (for example ufw with outgoing traffic denied) or on your network may block outgoing UDP port N." Each failure is still logged twice (R-02, not in scope). Evidence `u-b15-logs.png`. |
+
+## Debian 13 GNOME (Wayland)
+
+Template `wave-tpl-debian13`: NetworkManager writes a plain `/etc/resolv.conf`, no systemd-resolved (the real D-12 case), no firewall active. Two password logins (the first Debian session does not export the login keyring), FIX `.deb` installed after boot finished, saved account in the keyring, GUI started signed in.
+
+| # | Step | Result | Notes |
+| --- | --- | --- | --- |
+| D1 | Install, sign-in, Connect (lock off) | **PASS** | Connected; IPv4 and IPv6 HTTPS 200; drop-in (`dns=none`) and backup present; NetworkManager logs `dns-mgr: init: dns=none … rc-manager=unmanaged` while the drop-in is there. |
+| D2 | B-22: `nmcli con up` ×3 | **PASS** | resolv.conf stayed Wave's file with the tunnel resolvers after each re-activation; `getent` OK; 0 port-53 packets on the NIC. Evidence `d-b22-session.txt`. |
+| D3 | B-22: `systemctl restart NetworkManager` mid-session | **PASS** | Same worker, tunnel up, resolv.conf still Wave's, DNS OK. Evidence `d-b22-nm-restart.txt`. |
+| D4 | B-22: Disconnect (lock off) | **PASS** | Original restored byte for byte, drop-in and backup gone; the next `nmcli con up` rewrote it as NetworkManager; DNS OK. Evidence `d-b22-disconnect.txt`. |
+| D5 | B-22: lock on | **PASS** | 3× `nmcli con up`: resolv.conf kept, DNS OK, 0 port-53 packets on the NIC. Evidence `d-b22-lock-on.txt`. |
+| D6 | B-22: crash + foreign file + Recover | **PASS** | `kill -9` of the root worker and the broker, foreign resolv.conf: GUI **Cleanup needed** ("Networking service connection was lost"). Recover: no backup, no drop-in, no recovery record; NetworkManager took the file back. Connect afterwards: connected, DNS OK. Evidence `d-b22-crash.txt`, `d-b22-after-recover.png`. |
+| D7 | Leak check, connected | **PASS** | Lock off and lock on: DNS via `getent` and `dig`, IPv4/IPv6 HTTPS, `dig @9.9.9.9`: no packets on the NIC except WireGuard to the endpoint (only other LAN hosts' broadcast/multicast captured). Evidence `d-b22-session.txt`, `d-b22-lock-on.txt`. |
+| D8 | Lock on, Disconnect | **PASS** | DNS fails, IPv4/IPv6 HTTPS 000, nothing leaves the NIC. Evidence `d-lockon-disconnected.txt`. |
+| D9 | B-14 quick check | **PASS** | `nft flush ruleset`: table back after 4 s while connected (HTTPS 200), after 1 s while disconnected with the lock on. Evidence `d-b14.txt`. |
 
 ## New bugs
 
