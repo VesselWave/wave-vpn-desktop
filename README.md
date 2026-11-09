@@ -42,7 +42,7 @@ Built for x86_64 Linux with systemd; tested most on Ubuntu 24.04 GNOME. Download
 
 Run the command in the folder you downloaded to. Packages bring in WireGuard tools, iproute2, nftables and libsecret; the tarball's installer offers to install them with your package manager. Then open **Wave VPN** from your app menu.
 
-Wave VPN connects through a small root-owned helper that it authorizes for your user once, so connecting never asks for a password. Installing from a terminal with `sudo` sets it up; otherwise your first Connect asks for your password. To uninstall, remove the `wave-vpn` package (`sudo apt remove wave-vpn`, `sudo dnf remove wave-vpn`, `sudo pacman -R wave-vpn`) or run `sudo wave-vpn-uninstall` for the tarball. Both disconnect and turn off Network Lock first. More in the [user guide](docs/USER-GUIDE.md).
+Wave VPN connects through a small root-owned helper that it authorizes for your user once, so connecting never asks for a password. Installing from a terminal with `sudo` sets it up; otherwise your first Connect asks for your password once, in your system's standard prompt ("Authentication is needed to run `/usr/bin/wave-vpn service-install` as the super user"). To uninstall, remove the `wave-vpn` package (`sudo apt remove wave-vpn`, `sudo dnf remove wave-vpn`, `sudo pacman -R wave-vpn`) or run `sudo wave-vpn-uninstall` for the tarball. Both close open Wave VPN windows, disconnect and turn off Network Lock first. More in the [user guide](docs/USER-GUIDE.md).
 
 ## Verify your download
 
