@@ -130,5 +130,5 @@ Template `wave-tpl-opensuse-tw`: firewalld active (`public`), KWallet (`ksecretd
 
 ## Summary
 
-- Steps: 36. PASS 34, PARTIAL 1 (O9 → N-04), FAIL 1 (O1 → N-03).
+- Steps: 35 (U3 is setup only). PASS 33, PARTIAL 1 (O9 → N-04), FAIL 1 (O1 → N-03).
 - New bugs: N-03 high; N-01 minor; N-02 needs investigation; N-04 low; N-05 cosmetic.
