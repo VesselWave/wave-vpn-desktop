@@ -1,6 +1,6 @@
 # Ubuntu 24.04 GNOME (Wayland) distribution test
 
-> **In short:** status: in progress. Main-distro round on disposable Ubuntu 24.04.5 GNOME Wayland x86_64 guests with a live AirVPN account. The lock held through every crash, switch, outage, upgrade and uninstall tried, D-01 did not reproduce in 12 GUI switches, and D-03 to D-06 and D-19 behave as specified. Main defects: a ruleset flush silently drops Network Lock with the GUI quietly switching to "off" (D-13, B-14), two GUI instances fight over one tunnel (D-20, B-19), an upgrade while connected leaves a stale helper forever (D-08, B-01), Docker DNS and the NetworkManager connectivity check use the LAN resolver while connected (B-16, B-03), and a GNOME "Connection failed" notification on every Disconnect/switch/retry (B-02).
+> **In short:** Main-distro round on disposable Ubuntu 24.04.5 GNOME Wayland x86_64 guests with a live AirVPN account. The lock held through every crash, switch, outage, upgrade and uninstall tried, D-01 did not reproduce in 12 GUI switches, and D-03 to D-06 and D-19 behave as specified. Main defects: with systemd-resolved disabled, NetworkManager rewrites `/etc/resolv.conf` so DNS leaves outside the tunnel (or fails under the lock) and Recover then gets stuck (D-12, B-22, blocker off Ubuntu); a ruleset flush silently drops Network Lock with the GUI quietly switching to "off" (D-13, B-14), two GUI instances fight over one tunnel (D-20, B-19), an upgrade while connected leaves a stale helper forever (D-08, B-01), Docker DNS and the NetworkManager connectivity check use the LAN resolver while connected (B-16, B-03), and a GNOME "Connection failed" notification on every Disconnect/switch/retry (B-02).
 
 Date: 2026-11-08/09. Tester: main-distro test agent. Intake: [DESKTOP-BUG-INTAKE.md](DESKTOP-BUG-INTAKE.md) (D-ids). Line numbers refer to `b2ca704` unless stated.
 
@@ -10,7 +10,7 @@ Date: 2026-11-08/09. Tester: main-distro test agent. Intake: [DESKTOP-BUG-INTAKE
 | --- | --- | --- | --- | --- |
 | **LAB** (primary) | `main` `b2ca704` (lab build, rustc 1.99.1, unsigned) | `wave-vpn_0.1.3-1_amd64.deb` | `8c966c67…cd217ed41` | everything unless stated |
 | **REL** | signed published `v0.1.3` (signature and checksums verified) | `wave-vpn_0.1.3-1_amd64.deb` | `dacec39f…98710b` | upgrade baseline (D-08), D-05 comparison |
-| **E194** | `main` `e194e24` (lab build, unsigned) | `wave-vpn_0.1.3-1_amd64.deb` | — | D-09 re-check only |
+| **E194** | `main` `e194e24` (lab build, unsigned) | `wave-vpn_0.1.3-1_amd64.deb` | `2c49606e…` | D-09 re-check only |
 
 Both LAB and REL carry the version string `0.1.3-1`, so "upgrade" REL → LAB is `apt install ./lab.deb` reinstalling over the same version (dpkg runs the same prerm-upgrade/postinst-configure path as a real upgrade). A true version bump was not available.
 
@@ -46,7 +46,8 @@ Legend: PASS, FAIL (bug filed), PARTIAL, BLOCKED, NOT RUN. Build is LAB unless s
 | --- | --- | --- | --- |
 | B1 | First run | PASS | Overview with Best server; Connect while signed out jumps to Settings with "Sign in to AirVPN to connect". |
 | B2 | Wrong password | PASS | "AirVPN rejected the account request…", username kept, password cleared. |
-| B3 | Network unreachable (D-09) on LAB | PASS (as designed at b2ca704) → B-08 | All egress except LAN blackholed: "Cannot reach or validate AirVPN sign-in…" after 55–68 s, no Cancel, password cleared, copy recommends Recover. Re-check on E194: see D-09 row. |
+| B3 | Network unreachable (D-09) on LAB | PASS (as designed at b2ca704) → B-08 | All egress except LAN blackholed: "Cannot reach or validate AirVPN sign-in…" after 55–68 s, no Cancel, password cleared, copy recommends Recover. |
+| B3b | D-09 on **E194** | PASS (partial) | "Sign-in timed out after 45 seconds. Check your network and retry shortly." (observed 44–52 s with 8 s polling); **Cancel** appears next to "Signing in…" and returns the form immediately with the password restored. After the 45 s timeout the password field is empty, as expected before `9532b7e`; "password kept after timeout" was not tested (no 6139c3d build). |
 | B4 | Sign-in with autologin, no login keyring (D-18a) | PASS | GNOME asks "Choose password for new keyring". Cancel → "Signed in, but your account could not be saved. Unlock your keyring and sign in again."; nothing written in plain text; session stays signed in until restart. Creating the keyring saves one Secret Service item. |
 | B5 | Sign-in with password GDM login (PAM) | PASS | Login keyring unlocked by PAM; account saved silently, no plaintext file. |
 | B6 | Keyring restore across GUI restart | PASS | Signed in automatically after Quit/relaunch. |
@@ -87,7 +88,10 @@ Legend: PASS, FAIL (bug filed), PARTIAL, BLOCKED, NOT RUN. Build is LAB unless s
 | D5 | D-13 Docker, lock on (connected and disconnected) | PASS (document) → B-17 | Containers have **no** network at all while locked, even while connected: the `forward` chain is `policy drop` with no tunnel exception. Expected per the intake for disconnected; while connected it surprises users who toggled the lock on. |
 | D6 | D-14 wg-quick interface using table 51820 | PASS (wording) | Connect refused once with "Routing table 51820 is already in use" in Logs, no retry loop; Overview banner is the generic B-04 text, and the message names neither wg-quick nor a fix. |
 | D7 | D-14 Tailscale | NOT RUN | Skipped by design: no tailnet login, and a non-logged-in install adds no routes. |
-| D8 | D-12 plain resolv.conf, NetworkManager dnsmasq, libvirt | see "still to run" | |
+| D8 | **D-12** plain resolv.conf (resolved disabled, NM `dns=default`, `rc-manager=file`), lock **off** | **FAIL → B-22** | Connect writes the tunnel DNS and a backup. `nmcli con up` (re-activation, as on DHCP renew/reconnect) rewrites `/etc/resolv.conf` to the LAN resolver within seconds; Wave never re-asserts it. All DNS then leaves on the physical NIC (user lookups, search-domain expansions `*.lan`, NM connectivity check) while the GUI keeps showing **Connected** with "DNS: Verified". Disconnect → "A previous Wave connection needs cleanup"; Recover → "Recovery incomplete: Resolver changed outside Wave; original backup retained for manual conflict resolution"; Connect then fails with the generic B-04 text. The user is stuck with no in-app way out; `sudo wave-vpn recover` fails the same way until the backup file is moved away by hand. |
+| D9 | D-12, lock **on** | FAIL → B-22 | Same rewrite: DNS is fully broken (port 53 dropped by the lock, no leak), HTTPS by name fails, by IP works. GUI still says **Connected**, no warning. |
+| D10 | NetworkManager dnsmasq mode | NOT RUN | Time; D-12 already shows the resolver-ownership problem. |
+| D11 | libvirt default network | NOT RUN | Time; the forward-chain behaviour that matters is covered by B-17 (Docker). |
 
 ### E. Lifecycle (lock on, connected, capture running)
 
@@ -106,6 +110,10 @@ Legend: PASS, FAIL (bug filed), PARTIAL, BLOCKED, NOT RUN. Build is LAB unless s
 | E11 | Cancel during "Connecting…" | PASS | Server UDP blocked so connect hangs; power button cancels, worker gone, lock retained. The Connecting screen shows a contradictory "Disconnected" line and the full Blocking-traffic warning under "Connecting…" (cosmetic). |
 | E12 | D-19 no StatusNotifier host (extension disabled) | PASS | Close quits the app both disconnected and connected (tunnel removed, lock kept); no hidden process, also when closed within 2 s of launch. |
 | E13 | Close-to-tray with tray host | PASS | Window hides, GUI CPU 0 s/min hidden; tray **Connect** works while hidden, tray **Servers** restores the window on Servers. |
+| E15 | VM suspend (s2idle, ~3 min) and wake by key, connected, lock on | PASS (VM caveat) | Wave reconnected on its own (new endpoint), DNS and HTTPS OK, only WireGuard UDP on the NIC throughout. The guest has no S3 (OVMF), so this was s2idle; after wake the guest display did not return, several system services hit watchdog timeouts and the guest later hung (a VM artifact; hard reset). Physical suspend remains a bare-metal test. |
+| E16 | Logout while connected, lock on; log in again (password) | PASS | Logout ends the GUI, tunnel removed, lock kept (greeter has no internet; documented). After login Wave shows **Blocking traffic**. An account saved under autologin sits in a "Default keyring" that PAM does not unlock, so GNOME asks for its password (GNOME behaviour). |
+| E17 | D-18c gnome-keyring removed | PASS | Settings warns before sign-in: "Secure storage is unavailable. Signing in will save your password in plaintext on this computer." File `account.json` mode 0600; Sign out deletes it. |
+| E18 | D-07 target matching no server | PASS | "Nonexistent is not available right now. Choose another server or Best server."; no worker started. |
 | E14 | D-20 second GUI instance | **FAIL → B-19** | A second launch starts a second process, window and tray icon. Connecting from one makes the other show a raw error ("Error: Networking action failed; inspect Logs: Error: Another networking operation is running; ; Caused by:; Resource temporarily unavailable (os error 11)") plus **Blocking traffic** while the tunnel is up. Quitting the owner removes the tunnel; the other keeps going. |
 
 ### F. Other
@@ -120,9 +128,6 @@ Legend: PASS, FAIL (bug filed), PARTIAL, BLOCKED, NOT RUN. Build is LAB unless s
 | F6 | Support report | PASS | Preview and save (mode 0600) work; version, dependencies and protection state included, no account data. |
 | F7 | Sign out | PASS | Keyring item removed (`secret-tool search` → 0), no plaintext file, Settings shows the sign-in form. |
 
-### Still to run in this round
-
-D-12, NetworkManager dnsmasq, libvirt, suspend/resume, logout/login while connected, D-18c, D-07, D-09 on E194.
 
 ## Bugs
 
@@ -185,9 +190,9 @@ D-12, NetworkManager dnsmasq, libvirt, suspend/resume, logout/login while connec
 - **Code:** `src/views.rs:857`.
 - **Verify fix:** label reads "Switch to …" when connected to another server and is disabled or reads "Connected" for the current one.
 
-### B-08 Sign-in on an unreachable network (D-09) — minor, fixed on main?
+### B-08 Sign-in on an unreachable network (D-09) — minor, fixed on main
 
-- **Build:** LAB. ~55–68 s of "Signing in…", no Cancel, password field cleared afterwards; the error recommends Recover for what is a plain network outage. `e194e24`/`9532b7e` add a 45 s deadline, Cancel and keep the password; re-check pending.
+- **Build:** LAB. ~55–68 s of "Signing in…", no Cancel, password field cleared afterwards; the error recommends Recover for what is a plain network outage. Re-checked on E194: 45 s deadline and Cancel work (row B3b); password-kept-after-timeout (`9532b7e`) not tested.
 
 ### B-09 Uninstall leaves the GUI running with misleading text — minor
 
@@ -265,12 +270,35 @@ D-12, NetworkManager dnsmasq, libvirt, suspend/resume, logout/login while connec
 - **Code:** `src/gui.rs:335` (`system_dark: true`), `:1193-1197`.
 - **Verify fix:** with `default`, Wave renders light (treat "no preference" as light, as GTK/libadwaita do).
 
+### B-22 Plain resolv.conf: DNS lost to NetworkManager rewrites, then Recover is stuck (D-12) — blocker off Ubuntu, fix-now on Ubuntu with resolved disabled
+
+- **Setup (Ubuntu stand-in for Debian/Arch-style setups):** `systemctl disable --now systemd-resolved; rm /etc/resolv.conf; printf '[main]\ndns=default\nrc-manager=file\n' > /etc/NetworkManager/conf.d/dns.conf; systemctl restart NetworkManager`.
+- **Repro:** Connect (lock off). `nmcli con up "Wired connection 1"`. `tcpdump -ni <NIC> port 53`, then `getent hosts example.com`. Disconnect. Recover. Connect.
+- **Expected:** DNS stays on the tunnel for the whole session (re-assert like Eddie), or at least the GUI warns; Recover always completes.
+- **Actual:** within seconds of the re-activation `/etc/resolv.conf` is back to the LAN resolver and every query (including search-domain expansions and public names) leaves on the physical NIC, while the GUI keeps "Connected · DNS: Verified". With the lock on, DNS fails silently instead. After Disconnect, Recover reports "Recovery incomplete: Resolver changed outside Wave; original backup retained for manual conflict resolution", Overview says "A previous Wave connection needs cleanup", and Connect fails with the generic text, so the app is unusable until someone deletes `/etc/resolv.conf.wave-vpn-backup` by hand (then `sudo wave-vpn recover` completes).
+- **Evidence:** `b50-d12-connected.png`, `b52-d12-disconnect.png`, `b53-d12-recover.png`, `b54-d12-connect-after.png`, `b56-d12-locked-dns-broken.png`; capture summary (A/AAAA for test names, `*.lan` expansions, connectivity-check to the LAN resolver).
+- **Code:** written once in `configure` (`src/platform/linux.rs:509-527`); no re-assertion in `monitor` (`:846`); cleanup refuses when the content changed (`:579-598`), and the GUI blocks Connect while `recovery_needed` stays true.
+- **Verify fix:** same repro; capture shows no port-53 packets on the NIC during the session, Recover completes after a foreign rewrite (e.g. restore the backup or accept the foreign file and drop the backup), and Connect works afterwards.
+
 ### B-21 Server list copy — minor
 
 - Countries view: "1 servers"; one country rendered by its code ("CZ") instead of its name; list ordered by country code so names appear out of order (Canada, Switzerland, CZ…). Favorites empty state shows a blank table (D-07, documented).
+
+### Lab observation (not attributed)
+
+- Once, right after `apt install --reinstall` of E194 on a freshly rolled-back guest, GDM stopped one second after the package scripts finished, ending the desktop session. needrestart excludes `gdm`, Wave's postinst/`service-install` touch only its own units, and the same reinstall path on other guests (three times) never did this. Not reproduced; recorded so a fixer can watch for it.
+
+## Summary counts
+
+- Scenarios: 72 rows. PASS 53 (some with a documented caveat or copy issue), PARTIAL 6, FAIL 9, NOT RUN 3 (D7 Tailscale, D10 dnsmasq, D11 libvirt), N/A 1 (autostart).
+- Bugs: 22. Blocker 1: B-22 (resolved disabled / non-Ubuntu). Fix-now 6: B-01, B-02, B-03, B-14, B-16, B-19. Minor 12: B-04, B-05, B-06, B-07, B-08 (fixed on main by `e194e24`, verified), B-09, B-10, B-11, B-15, B-18, B-20, B-21. Doc 3: B-12, B-13, B-17.
 
 ## Not run or limited
 
 - Real version bump upgrade: both packages are `0.1.3-1`.
 - Hardware suspend/resume, GPUs, Secure Boot: not in this lab.
 - Dual-stack LAN IPv6 (no global IPv6 on the lab LAN).
+- Tailscale (no tailnet login by design), NetworkManager dnsmasq mode, libvirt nested guests: time.
+- D-09 "password kept after timeout" and the "Network Lock" label changes: need a `9532b7e`/`6139c3d` build; only E194 was tested.
+- D-06 "other user" (second desktop user) and "no pkexec" (other distributions): not run.
+- Suspend was s2idle inside a VM (no S3 with OVMF); the guest became unstable afterwards.
