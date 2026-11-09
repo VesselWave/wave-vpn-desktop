@@ -76,7 +76,10 @@ EOF
     home=$(getent passwd "$user" | cut -d: -f6)
     install -d -o "$user" -g "$user" "$home/.config"
     echo yes > "$home/.config/gnome-initial-setup-done"
-    chown "$user:$user" "$home/.config/gnome-initial-setup-done"
+    # Newer releases also show a per-release "what's new" wizard unless stamped.
+    install -d -o "$user" -g "$user" "$home/.config/gnome-initial-setup"
+    : > "$home/.config/gnome-initial-setup/upgrade-$VERSION_ID-done"
+    chown -R "$user:$user" "$home/.config/gnome-initial-setup-done" "$home/.config/gnome-initial-setup"
     # Screenshots need an unlocked, unblanked screen (deviation; tests may change it).
     install -d /etc/dconf/profile /etc/dconf/db/local.d
     printf 'user-db:user\nsystem-db:local\n' > /etc/dconf/profile/user
@@ -89,6 +92,9 @@ lock-enabled=false
 
 [org/gnome/settings-daemon/plugins/power]
 sleep-inactive-ac-type='nothing'
+
+[org/gnome/shell]
+welcome-dialog-last-shown-version='9999'
 EOF
     dconf update
     # Crash dialogs would cover the screen under test.

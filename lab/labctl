@@ -403,6 +403,38 @@ class Lab:
             raise LabError('guest agent reports no IPv4 address yet')
         return sorted(candidates)[0][1]
 
+    NEIGHBOR_SWEEP = r'''
+import ipaddress, re, socket, subprocess, sys, time
+vmid = sys.argv[1]
+conf = subprocess.check_output(['qm', 'config', vmid], text=True)
+mac = re.search(r'^net0: \w+=([0-9A-Fa-f:]{17})', conf, re.M).group(1).lower()
+bridge = re.search(r'^net0: .*bridge=([\w.-]+)', conf, re.M).group(1)
+addr = subprocess.check_output(['ip', '-4', '-o', 'addr', 'show', bridge], text=True).split()[3]
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+for _ in range(30):
+    for ip in ipaddress.ip_network(addr, strict=False).hosts():
+        try:
+            sock.sendto(b'', (str(ip), 9))  # any packet makes the kernel ARP for it
+        except OSError:
+            pass
+    time.sleep(2)
+    for line in subprocess.check_output(['ip', '-4', 'neigh', 'show', 'dev', bridge], text=True).splitlines():
+        if mac in line.lower() and 'FAILED' not in line:
+            print(line.split()[0])
+            sys.exit(0)
+    time.sleep(3)
+sys.exit(1)
+'''
+
+    def neighbor_ip(self, vmid):
+        """IPv4 of a guest without an agent, from the host's neighbour table (same L2 bridge)."""
+        proc = self.host('python3 -c %s %s' % (shlex.quote(self.NEIGHBOR_SWEEP), int(vmid)), timeout=200,
+                         check=False)
+        ip = proc.stdout.decode().strip()
+        if proc.returncode != 0 or not re.match(r'^\d+\.\d+\.\d+\.\d+$', ip):
+            raise LabError('guest MAC not found in the host neighbour table')
+        return ip
+
     def refresh_ssh(self, vmid):
         ip = self.agent_ip(vmid)
         key = self.helper('read', vmid, '/etc/ssh/ssh_host_ed25519_key.pub').stdout.decode().split()
@@ -772,15 +804,18 @@ def template_create(lab, distro, vmid=None, name=None, keep=False):
         lab.qm('start', vmid, timeout=180)
         console = lab.helper('serial', vmid, 600, '', 'END SSH HOST KEY KEYS', timeout=700,
                              check=False).stdout.decode(errors='replace')
+        (cfg.state_dir / ('%d-first-boot-console.txt' % vmid)).write_text(console)
         found = re.findall(r'ci-info: \|\s*(e\w+)\s*\|\s*True\s*\|\s*(\d+\.\d+\.\d+\.\d+)\s*\|', console)
         key = re.search(r'(ssh-ed25519 [A-Za-z0-9+/=]+)', console.split('BEGIN SSH HOST KEY KEYS')[-1])
-        if not found or not key:
-            raise LabError('could not read address/host key from the serial console')
-        lab.pin_host_key(vmid, found[0][1], key.group(1))
+        if not key:
+            raise LabError('could not read the SSH host key from the serial console')
+        # Newer cloud-init may print its table before DHCP finishes: look the MAC up instead.
+        ip = found[0][1] if found else lab.neighbor_ip(vmid)
+        lab.pin_host_key(vmid, ip, key.group(1))
         vm = {'vmid': vmid, 'name': name}
         lab.wait(vm, 'ssh', timeout=300)
         provision = LAB_DIR / spec['provision']
-        lab.push(vm, provision, STAGED_SCRIPT, via='ssh')
+        lab.push(vm, provision, STAGED_SCRIPT, root=True, via='ssh')
         lab.push_secret(vm, cfg.password())
         env = 'WAVE_LAB_USER=%s' % q(cfg.guest_user)
         if cfg.apt_proxy:
@@ -811,6 +846,8 @@ def template_seal(lab, vm, distro):
     spec, cfg, vmid = DISTROS[distro], lab.cfg, vm['vmid']
     if lab.status(vmid) != 'running':
         raise LabError('start %s first' % vm['name'])
+    # A user-owned file in sticky /var/tmp cannot be rewritten by root (protected_regular).
+    lab.guest_run(vm, 'rm -f %s' % STAGED_SCRIPT, root=True)
     lab.push(vm, LAB_DIR / spec['provision'], STAGED_SCRIPT, root=True)
     env = 'WAVE_LAB_USER=%s' % shlex.quote(cfg.guest_user)
     rc = lab.provision_unit(vm, STAGED_SCRIPT, 'seal', env, via='agent')
@@ -920,7 +957,12 @@ def build_packages(lab, src, out, ref='HEAD', worktree=False, keep_running=False
                                               stream=True)
                 if rc != 0:
                     raise LabError('builder setup failed: %s' % err.decode(errors='replace')[-2000:])
-                lab.guest_run(vm, 'bash /tmp/wave-builder-setup.sh user', timeout=3600, stream=True)
+                rc, _, err, _ = lab.guest_run(vm, 'bash /tmp/wave-builder-setup.sh user', timeout=3600,
+                                              stream=True)
+                if rc != 0:
+                    raise LabError('Rust setup failed: %s' % err.decode(errors='replace')[-2000:])
+                lab.qm('snapshot', vm['vmid'], 'toolchain', '--description', 'builder toolchain installed',
+                       timeout=300)
             lab.push(vm, tarball, '/tmp/wave-source.tar.gz')
             lab.push(vm, LAB_DIR / 'builder' / 'build.sh', '/tmp/wave-build.sh')
             lab.note('building %s (%s)' % (meta['source'], meta['revision']))

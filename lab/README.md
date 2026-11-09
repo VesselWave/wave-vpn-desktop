@@ -110,12 +110,14 @@ lab/labctl destroy wave-u1
 
 ### Templates
 
-`template-create ubuntu2404` downloads the pinned Ubuntu cloud image to the
+`template-create ubuntu2404|ubuntu2604|fedora45` downloads the pinned Ubuntu cloud image to the
 host's `image_dir`, checks its SHA-256, creates the VM on the configured storage
 (q35, OVMF without enrolled keys, virtio-scsi qcow2, virtio-gpu, USB tablet,
 `serial0` socket, guest agent), boots it once with Proxmox cloud-init (key-only
-login), reads the address and SSH host key from the serial console, then runs
-`templates/ubuntu-provision.sh install` as a transient systemd unit:
+login), reads the SSH host key (and, when printed, the address) from the serial
+console, otherwise finds the address by MAC in the host's neighbour table, then
+runs `templates/ubuntu-provision.sh install` (or `fedora-provision.sh`) as a
+transient systemd unit. The Ubuntu script provides:
 
 * `ubuntu-desktop` with GDM and GNOME on Wayland, the Ubuntu AppIndicators
   extension, gnome-keyring, the HWE kernel on 24.04 (as installed by current
@@ -135,12 +137,27 @@ DHCP leases, keyrings, logs and cloud-init state, trims the disk), powers off an
 converts the VM to a template. Each clone's first boot generates SSH host keys
 and takes its hostname from the SMBIOS serial that `clone` sets.
 
+`fedora-provision.sh` installs `workstation-product-environment` on Fedora
+Cloud Base, switches the release identity to Workstation (os-release, presets
+and the `FedoraWorkstation` firewalld zone), keeps SELinux enforcing and
+firewalld active, enables sshd, the guest agent and a serial getty, and installs
+the same test tools (`wireshark-cli`, `bind-utils`, `conntrack-tools`,
+`iproute-tc`, `kernel-modules-extra`, `libsecret`). The AppIndicator extension is
+installed but, as on stock Fedora, not enabled.
+
+If provisioning succeeds but a later step fails, fix the guest and resume with
+`labctl template-seal NAME DISTRO` instead of starting over.
+
 Deliberate deviations from a stock desktop install, for unattended testing:
 GDM autologin by default (switch with `login-mode`); passwordless `sudo` for the
 test user; apt-daily, apt-daily-upgrade and unattended-upgrades disabled and
 snap refreshes held, so the system does not change under a test; screen lock and
 idle blanking disabled and apport crash dialogs off; the kernel console also on
-`ttyS0`. Re-enable any of these inside a clone when a test needs them.
+`ttyS0`; first-login welcome/tour dialogs suppressed. Fedora additionally makes
+only the `virt_qemu_ga_t` SELinux domain permissive (guest-exec children would
+otherwise be confined and unable to inspect the session), clears the guest-agent
+RPC filter, and disables `dnf-makecache.timer` and GNOME Software downloads.
+Re-enable any of these inside a clone when a test needs them.
 
 ### Legacy scripts
 
