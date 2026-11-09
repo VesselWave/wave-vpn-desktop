@@ -504,12 +504,16 @@ impl Wave {
         servers
     }
     fn selected(&self) -> Option<&Server> {
-        let candidates = self.candidates();
         if self.prefs.options.on("locklast") {
             if let Some(name) = &self.session_server {
-                return candidates.into_iter().find(|s| &s.name == name);
+                return self.candidates().into_iter().find(|s| &s.name == name);
             }
         }
+        self.target_server()
+    }
+    /// The server the chosen target picks now, ignoring the session's.
+    fn target_server(&self) -> Option<&Server> {
+        let candidates = self.candidates();
         match &self.prefs.target {
             Target::Best => candidates.first().copied(),
             Target::Country(c) => candidates.into_iter().find(|s| &s.country == c),
@@ -1142,6 +1146,8 @@ impl Wave {
                 }
             }
             Message::Connect if self.network_busy && self.control.is_none() => return Task::none(),
+            // Already connected or connecting there: nothing to switch.
+            Message::Connect if self.target_in_use() && !self.switching => return Task::none(),
             Message::Connect if self.control.is_some() && !self.preview => {
                 self.switching = true;
                 self.retry_at = None;
@@ -1536,6 +1542,31 @@ impl Wave {
             // an immediate Connect that skips the backoff.
             active: self.control.is_some() || self.retry_at.is_some(),
             signed_in: self.account.is_some(),
+        }
+    }
+    /// A connection runs and the target picks the server it uses.
+    fn target_in_use(&self) -> bool {
+        self.control.is_some()
+            && self
+                .active_server
+                .as_ref()
+                .is_some_and(|active| self.target_server().is_some_and(|s| s.name == active.name))
+    }
+    /// The Servers page's button: Connect, Switch to another server while a
+    /// connection runs, or nothing for the server already in use.
+    fn servers_action(&self) -> (String, Option<Message>) {
+        let target = views::target_label(&self.prefs.target);
+        if self.control.is_none() {
+            (format!("Connect to {target}"), Some(Message::Connect))
+        } else if let Some(active) = self.active_server.as_ref().filter(|_| self.target_in_use()) {
+            let label = if self.since.is_some() {
+                format!("Connected to {}", active.name)
+            } else {
+                format!("Connecting to {}…", active.name)
+            };
+            (label, None)
+        } else {
+            (format!("Switch to {target}"), Some(Message::Connect))
         }
     }
     /// The power button cancels/disconnects instead of connecting.

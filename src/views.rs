@@ -25,7 +25,7 @@ fn link<'a>(label: &'a str, msg: Message) -> Element<'a, Message> {
         .padding([4, 6])
         .into()
 }
-fn target_label(t: &Target) -> String {
+pub fn target_label(t: &Target) -> String {
     match t {
         Target::Best => "Best server".into(),
         Target::Country(c) => country(c),
@@ -854,8 +854,9 @@ fn servers(app: &Wave) -> Element<'_, Message> {
             .padding(32),
         );
     }
-    let connect = button(text(format!("Connect to {}", target_label(&app.prefs.target))).size(14))
-        .on_press(Message::Connect)
+    let (label, action) = app.servers_action();
+    let connect = button(text(label).size(14))
+        .on_press_maybe(action)
         .padding([10, 20])
         .style(theme::primary);
     let mut table = column![].spacing(4).height(Fill);

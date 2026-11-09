@@ -644,3 +644,43 @@ fn forum_u2404_b06_leftover_tunnel_is_not_reported_as_blocking() {
         Some(wave_protocol::service::WORKER_LOST)
     );
 }
+
+// U2404 B-07: while connected, Servers offers "Switch to" another server and
+// nothing for the server already in use; Connect there does not reconnect.
+#[test]
+fn forum_u2404_b07_servers_button_does_not_reconnect_to_the_current_server() {
+    let mut app = app();
+    let (label, action) = app.servers_action();
+    assert_eq!(label, "Connect to Best server");
+    assert!(action.is_some());
+    let current = app.selected().unwrap().name.clone();
+    app.prefs.target = Target::Server(current.clone());
+    // "Start with last server" must not hide a switch to another target.
+    app.prefs.options.set("locklast", "true".into());
+    app.session_server = Some(current.clone());
+    running(&mut app, &current);
+    assert_eq!(app.servers_action().0, format!("Connecting to {current}…"));
+    app.since = Some(Instant::now());
+    app.status = "Connected".into();
+    let (label, action) = app.servers_action();
+    assert_eq!(label, format!("Connected to {current}"));
+    assert!(action.is_none());
+    app.preview = false; // Connect while connected only signals the worker.
+    app.test_helper = Some(true);
+    let _ = app.update(Message::Connect);
+    assert!(!app.switching, "the current server is not reconnected");
+    assert_eq!(app.status, "Connected");
+    let other = app
+        .candidates()
+        .into_iter()
+        .find(|s| s.name != current)
+        .unwrap()
+        .name
+        .clone();
+    app.prefs.target = Target::Server(other.clone());
+    let (label, action) = app.servers_action();
+    assert_eq!(label, format!("Switch to {other}"));
+    assert!(action.is_some());
+    let _ = app.update(Message::Connect);
+    assert!(app.switching);
+}

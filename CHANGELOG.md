@@ -20,6 +20,7 @@
   - A failed connection shows its reason (for example "WireGuard handshake expired") instead of "Connection stopped unexpectedly; inspect Logs before retrying", and Logs no longer get the circular "Networking action failed; inspect Logs" line; failed Recover and Network Lock actions show the helper's reason too (B-04)
   - Disconnect (also from the tray) and a successful Recover clear the previous failure's banner (B-05)
   - When the networking worker is killed or crashes, the service now removes its leftover tunnel at once (keeping an enabled Network Lock) and says so. While a leftover connection is reported, Wave shows **Cleanup needed** and asks for Recover instead of claiming **Blocking traffic** (B-06)
+  - Servers says **Switch to …** while connected and **Connected to …** (disabled) for the server already in use, instead of "Connect to …", which reconnected needlessly (B-07)
   - Uninstalling closes open Wave VPN windows instead of leaving one that offers first-time setup; a window whose app was removed says so (B-09). The uninstall message and user guide say that preferences, including the Network Lock choice, are kept even by `apt purge` (B-13)
 
 ## 0.1.3 · 2026-11-05 · early release
