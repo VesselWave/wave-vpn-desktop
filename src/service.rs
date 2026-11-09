@@ -30,6 +30,10 @@ pub fn authorized_uid() -> Option<u32> {
 /// The client's own exit error when the helper reports failure. The helper's
 /// lines before it carry the actual reason.
 pub const ACTION_FAILED: &str = "Networking action failed";
+/// The service's report after a connection worker died before its own
+/// cleanup (killed or crashed): it removed the tunnel, or could not.
+pub const WORKER_LOST: &str = "The networking worker stopped unexpectedly. Wave removed its tunnel; Network Lock stays as it was.";
+pub const WORKER_LOST_CLEANUP_FAILED: &str = "The networking worker stopped unexpectedly and its tunnel could not be removed. Use Recover in Overview; Network Lock stays as it was.";
 /// Setup needs pkexec (polkit); some minimal installs lack it.
 pub const PKEXEC_MISSING: &str =
     "Administrator authorization is unavailable because pkexec (polkit) is not installed";
@@ -122,6 +126,8 @@ mod linux {
     };
     pub const SOCKET: &str = "/run/wave-vpn-service.sock";
     const CONFIG: &str = "/etc/wave-vpn/service.json";
+    /// The worker's journal of tunnel resources; present while connected.
+    const RECOVERY: &str = "/run/wave-vpn/recovery.json";
     const HELPER: &str = "/usr/local/libexec/wave-vpn-helper";
     const SOCKET_UNIT: &str = "/etc/systemd/system/wave-vpn-service.socket";
     const SERVICE_UNIT: &str = "/etc/systemd/system/wave-vpn-service.service";
@@ -199,7 +205,7 @@ mod linux {
         // service would kill the worker and drop the tunnel, so skip that and
         // let the broker restart itself once idle (see `serve`). The recovery
         // record must therefore stay readable by the next release.
-        let connected = Path::new("/run/wave-vpn/recovery.json").exists();
+        let connected = Path::new(RECOVERY).exists();
         let uid = uid
             .or_else(|| {
                 std::env::var("SUDO_UID")
@@ -243,7 +249,7 @@ mod linux {
     pub fn uninstall() -> Result<()> {
         root()?;
         ensure!(
-            !Path::new("/run/wave-vpn/recovery.json").exists(),
+            !Path::new(RECOVERY).exists(),
             "Disconnect and recover the VPN before removing the service"
         );
         systemctl(&["disable", "--now", "wave-vpn-service.socket"])?;
@@ -372,7 +378,49 @@ mod linux {
         let _ = input_thread.join();
         let _ = stdout.join();
         let _ = stderr.join();
+        if action == "transport-worker"
+            && !status.success()
+            && Path::new(RECOVERY).exists()
+            && !worker_running()
+        {
+            // The worker died before its own cleanup (killed or crashed). Its
+            // tunnel, routes and DNS would keep carrying traffic with nothing
+            // in control, so recover now; Recover keeps an enabled lock.
+            recover_lost_worker(&mut stream, helper)?;
+        }
         finish(&mut stream, status.success())?;
+        Ok(())
+    }
+    /// Another worker holds the global operation lock, so the resources are
+    /// its own (a worker that failed to start owns none).
+    fn worker_running() -> bool {
+        OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open("/run/wave-vpn/worker.lock")
+            .is_ok_and(|lock| fs2::FileExt::try_lock_exclusive(&lock).is_err())
+    }
+    fn recover_lost_worker(stream: &mut UnixStream, helper: &Path) -> Result<()> {
+        let mut command = Command::new(helper);
+        command
+            .arg("recover")
+            .env_clear()
+            .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin");
+        let output = crate::process::output(&mut command, None, Duration::from_secs(90));
+        if let Ok(output) = &output {
+            // Its protection event and summary line, for the controller.
+            stream.write_all(&output.stdout)?;
+        }
+        let cleaned = output.is_ok_and(|output| output.status.success());
+        writeln!(
+            stream,
+            "{}",
+            if cleaned {
+                super::WORKER_LOST
+            } else {
+                super::WORKER_LOST_CLEANUP_FAILED
+            }
+        )?;
         Ok(())
     }
     pub fn serve() -> Result<()> {

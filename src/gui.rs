@@ -1469,7 +1469,7 @@ impl Wave {
         if self.protection.worker_active {
             Some("Another Wave networking operation is active. Finish it before connecting or recovering.")
         } else if self.protection.recovery_needed {
-            Some("A previous Wave connection needs cleanup. Use Recover before reconnecting; Network Lock is retained.")
+            Some("A previous Wave connection was not cleaned up and its tunnel may still be active. Use Recover to remove it; Network Lock stays as it is.")
         } else {
             None
         }
@@ -1485,19 +1485,28 @@ impl Wave {
                 .len()
         })
     }
+    /// A current status reports resources of an earlier connection and no
+    /// live worker, e.g. after the worker was killed: its tunnel may still
+    /// carry traffic, so nothing can be claimed about blocking.
+    fn leftover_connection(&self) -> bool {
+        self.protection_revision == Some(self.network_revision)
+            && self.control.is_none()
+            && !self.protection.worker_active
+            && self.protection.recovery_needed
+    }
     /// Network Lock is confirmed on and no tunnel carries traffic: apps have
     /// no internet. Never claimed from a saved preference.
     fn blocking_traffic(&self) -> bool {
-        self.protection_known && self.guarded && self.since.is_none()
+        self.protection_known && self.guarded && self.since.is_none() && !self.leftover_connection()
     }
     /// The status shown in the sidebar, Overview and tray. An idle retained
     /// lock is not just "Disconnected": traffic is blocked.
     fn display_status(&self) -> String {
-        if self.blocking_traffic()
-            && self.control.is_none()
-            && self.retry_at.is_none()
-            && self.status == "Disconnected"
-        {
+        let idle =
+            self.control.is_none() && self.retry_at.is_none() && self.status == "Disconnected";
+        if idle && self.leftover_connection() {
+            "Cleanup needed".into()
+        } else if idle && self.blocking_traffic() {
             "Blocking traffic".into()
         } else {
             self.status.clone()
@@ -1714,7 +1723,11 @@ impl Wave {
         if let Some(problem) = helper_problem(&line) {
             self.helper_problem = Some(problem);
         }
-        if let Some(reason) = line.strip_prefix("Error: ").map(str::trim) {
+        if line == wave_protocol::service::WORKER_LOST
+            || line == wave_protocol::service::WORKER_LOST_CLEANUP_FAILED
+        {
+            self.worker_error = Some(line.clone());
+        } else if let Some(reason) = line.strip_prefix("Error: ").map(str::trim) {
             // The client's own exit line only repeats that the helper failed.
             if reason == wave_protocol::service::ACTION_FAILED {
                 return;

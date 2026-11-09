@@ -596,3 +596,51 @@ fn forum_u2404_b05_disconnect_and_recover_clear_a_stale_error() {
         .as_deref()
         .is_some_and(|e| e.contains("Recovery incomplete")));
 }
+
+// U2404 B-06: after the root worker was killed its tunnel can still carry
+// traffic. While a current status reports leftover resources and no live
+// worker, Wave does not claim "Blocking traffic"; it asks for Recover.
+#[test]
+fn forum_u2404_b06_leftover_tunnel_is_not_reported_as_blocking() {
+    let status = |recovery_needed| wave_protocol::protection::Status {
+        enabled: Some(true),
+        recovery_needed,
+        ..Default::default()
+    };
+    let mut app = app();
+    running(&mut app, "Achernar");
+    app.transport_line(r#"{"event":"protection","enabled":true}"#.into());
+    end(&mut app, CONNECTION_STOPPED);
+    app.sender
+        .send(Event::NetworkStatus(app.network_revision, Ok(status(true))))
+        .unwrap();
+    let _ = app.update(Message::Tick);
+    assert!(!app.blocking_traffic());
+    assert_eq!(app.display_status(), "Cleanup needed");
+    assert_eq!(app.tray_snapshot().status, "Cleanup needed");
+    assert!(app
+        .protection_note()
+        .is_none_or(|note| !note.contains("no internet")));
+    let warning = app.idle_network_warning().unwrap();
+    assert!(
+        warning.contains("may still be active") && warning.contains("Recover"),
+        "{warning}"
+    );
+    // Once cleaned up, the retained lock reads as blocking traffic again.
+    app.sender
+        .send(Event::NetworkStatus(
+            app.network_revision,
+            Ok(status(false)),
+        ))
+        .unwrap();
+    let _ = app.update(Message::Tick);
+    assert_eq!(app.display_status(), "Blocking traffic");
+    // The service's cleanup after a lost worker is the reason shown.
+    running(&mut app, "Achernar");
+    app.transport_line(wave_protocol::service::WORKER_LOST.into());
+    end(&mut app, CONNECTION_STOPPED);
+    assert_eq!(
+        app.error.as_deref(),
+        Some(wave_protocol::service::WORKER_LOST)
+    );
+}

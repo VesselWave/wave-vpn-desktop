@@ -53,6 +53,7 @@ REQUIRED = (
     'forum_u2404_b01_replaced_helper_executable_is_detected',
     'forum_u2404_b04_failure_banner_names_the_reason',
     'forum_u2404_b05_disconnect_and_recover_clear_a_stale_error',
+    'forum_u2404_b06_leftover_tunnel_is_not_reported_as_blocking',
     'forum_u2404_b09_removed_app_says_so_instead_of_offering_setup',
 )
 RESULT = re.compile(r'^test (\S+) \.\.\. (ok|FAILED|ignored)\b')
