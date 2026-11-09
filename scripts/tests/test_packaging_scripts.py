@@ -106,5 +106,35 @@ class Hooks(unittest.TestCase):
             self.assertEqual([], calls)
 
 
+class NeedrestartOptOut(unittest.TestCase):
+    """R-01: Ubuntu's needrestart restarts services whose executable was
+    replaced. After an upgrade while connected that restart took the active
+    tunnel down; the broker restarts itself once idle instead."""
+
+    CONF = ROOT / 'packaging' / 'needrestart-wave-vpn.pl'
+    DST = '/etc/needrestart/conf.d/wave-vpn.conf'
+
+    def test_r01_package_ships_the_needrestart_opt_out_as_config(self):
+        package = (ROOT / 'scripts' / 'package.sh').read_text()
+        line = next((l for l in package.splitlines() if self.DST in l), '')
+        self.assertIn('needrestart-wave-vpn.pl', line)
+        self.assertIn('type: config', line, 'admins may edit it; keep their changes')
+
+    @unittest.skipUnless(subprocess.run(['sh', '-c', 'command -v perl'], capture_output=True).returncode == 0, 'perl missing')
+    def test_r01_opt_out_never_restarts_the_networking_service(self):
+        probe = (
+            'our %nrconf; -r $ARGV[0] or die "missing"; do $ARGV[0]; die "parse: $@" if $@; '  # needrestart's own check
+            'for my $unit ("wave-vpn-service.service", "wave-vpn-lock.service", "ssh.service") { '
+            'my $v = "unset"; for my $re (keys %{$nrconf{override_rc}}) { $v = $nrconf{override_rc}{$re} if $unit =~ /$re/ } '
+            'print "$unit=$v\n" }'
+        )
+        result = subprocess.run(['perl', '-e', probe, str(self.CONF)], capture_output=True, text=True)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(
+            ['wave-vpn-service.service=0', 'wave-vpn-lock.service=0', 'ssh.service=unset'],
+            result.stdout.split(),
+        )
+
+
 if __name__ == '__main__':
     unittest.main()

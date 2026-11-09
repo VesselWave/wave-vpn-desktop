@@ -39,6 +39,7 @@ contents:
   - {src: '$bindir/wave-vpn', dst: /usr/bin/wave-vpn, file_info: {mode: 0755}}
   - {src: '$bindir/wave-vpn-gui', dst: /usr/bin/wave-vpn-gui, file_info: {mode: 0755}}
   - {src: '$repo/packaging/wave-vpn.desktop', dst: /usr/share/applications/wave-vpn.desktop, file_info: {mode: 0644}}
+  - {src: '$repo/packaging/needrestart-wave-vpn.pl', dst: /etc/needrestart/conf.d/wave-vpn.conf, type: config, file_info: {mode: 0644}}
   - {src: '$repo/resources/wave-vpn.svg', dst: /usr/share/icons/hicolor/scalable/apps/wave-vpn.svg, file_info: {mode: 0644}}
   - {src: '$repo/resources/fonts/OFL.txt', dst: $doc/licenses/OFL.txt, file_info: {mode: 0644}}
   - {src: '$repo/resources/LUCIDE-LICENSE.txt', dst: $doc/licenses/LUCIDE-LICENSE.txt, file_info: {mode: 0644}}
