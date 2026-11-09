@@ -183,6 +183,10 @@ struct Wave {
     retryable: bool,
     /// A helper refusal seen during this connection, explained on its end.
     helper_problem: Option<&'static str>,
+    /// The worker's own "Error: …" reason, shown when this connection ends.
+    worker_error: Option<String>,
+    /// The privileged action awaiting its result (one at a time).
+    privileged_action: Option<&'static str>,
     retry_attempts: u32,
     diagnostics: Option<String>,
     diagnostics_path: String,
@@ -292,6 +296,8 @@ impl Wave {
             checks: Default::default(),
             retryable: false,
             helper_problem: None,
+            worker_error: None,
+            privileged_action: None,
             retry_attempts: 0,
             diagnostics: None,
             diagnostics_path: String::new(),
@@ -854,7 +860,14 @@ impl Wave {
                             self.rx_rate = 0.;
                             self.tx_rate = 0.;
                             let helper = self.helper_problem.take();
+                            let reason = self.worker_error.take();
                             if !message.is_empty() {
+                                // The worker's own reason beats the generic exit.
+                                let message = if message == CONNECTION_STOPPED {
+                                    reason.unwrap_or(message)
+                                } else {
+                                    message
+                                };
                                 let message = helper
                                     .or_else(|| helper_problem(&message))
                                     .map(str::to_owned)
@@ -868,6 +881,10 @@ impl Wave {
                         }
                         Event::Notice(generation, result) => {
                             self.network_busy = false;
+                            // A successful Recover supersedes the failure it fixed.
+                            if self.privileged_action.take() == Some("recover") && result.is_ok() {
+                                self.error = None;
+                            }
                             let outcome = generation.map(|g| (g, result.as_ref().err().cloned()));
                             self.protection_known = false;
                             self.protection_revision = None;
@@ -1148,6 +1165,7 @@ impl Wave {
                         self.checks = Default::default();
                         self.retryable = false;
                         self.helper_problem = None;
+                        self.worker_error = None;
                         let checks = self
                             .manifest
                             .as_ref()
@@ -1187,6 +1205,8 @@ impl Wave {
                 }
             }
             Message::Disconnect => {
+                // The user's choice supersedes an earlier failure's banner.
+                self.error = None;
                 self.retry_attempts = 0;
                 if self.control.is_none() {
                     self.status = "Disconnected".into();
@@ -1694,6 +1714,15 @@ impl Wave {
         if let Some(problem) = helper_problem(&line) {
             self.helper_problem = Some(problem);
         }
+        if let Some(reason) = line.strip_prefix("Error: ").map(str::trim) {
+            // The client's own exit line only repeats that the helper failed.
+            if reason == wave_protocol::service::ACTION_FAILED {
+                return;
+            }
+            if self.worker_error.is_none() && !reason.is_empty() {
+                self.worker_error = Some(reason.to_owned());
+            }
+        }
         if line.contains("Connected to WireGuard server") {
             self.connected();
         }
@@ -1798,6 +1827,7 @@ impl Wave {
             return;
         }
         self.network_busy = true;
+        self.privileged_action = Some(action);
         // Recover reuses the helper's own set; the lock actions apply this one.
         let generation = (action != "recover").then(|| {
             self.exemptions_generation += 1;
@@ -1825,21 +1855,12 @@ impl Wave {
                     .write_all(&serde_json::to_vec(&input)?)?;
                 let result = child.wait_with_output()?;
                 if !result.status.success() {
-                    // Plain helper lines (e.g. a broker rejection) explain more
-                    // than the client's generic exit message.
-                    let stdout = String::from_utf8_lossy(&result.stdout);
-                    let plain: Vec<&str> = stdout
-                        .lines()
-                        .filter(|l| !l.trim_start().starts_with('{'))
-                        .collect();
                     anyhow::bail!(
-                        "{}{}",
-                        String::from_utf8_lossy(&result.stderr).trim(),
-                        if plain.is_empty() {
-                            String::new()
-                        } else {
-                            format!(": {}", plain.join("; "))
-                        }
+                        "{}",
+                        helper_failure(
+                            &String::from_utf8_lossy(&result.stderr),
+                            &String::from_utf8_lossy(&result.stdout)
+                        )
                     );
                 }
                 Ok(String::from_utf8_lossy(&result.stdout).into_owned())
@@ -1889,6 +1910,9 @@ impl Drop for Wave {
         }
     }
 }
+/// A connection worker failed without a reason of its own (for example, it
+/// was killed). Usually the worker's "Error: …" line replaces it.
+const CONNECTION_STOPPED: &str = "Connection stopped unexpectedly";
 const KEEPING_SERVERS: &str = "Keeping the current server list";
 const EXEMPTION_RETRY_MIN: Duration = Duration::from_secs(30);
 const EXEMPTION_RETRY_MAX: Duration = Duration::from_secs(15 * 60);
@@ -1912,6 +1936,28 @@ fn helper_problem(text: &str) -> Option<&'static str> {
         Some(HELPER_REFUSED)
     } else {
         None
+    }
+}
+/// Why a privileged action failed: the helper's own error and plain lines
+/// (e.g. a broker rejection), without the client's generic exit line.
+fn helper_failure(stderr: &str, stdout: &str) -> String {
+    let mut reasons: Vec<&str> = vec![];
+    for line in stderr
+        .lines()
+        .chain(stdout.lines().filter(|l| !l.trim_start().starts_with('{')))
+    {
+        let line = line.trim().trim_start_matches("Error: ").trim();
+        if !line.is_empty()
+            && line != wave_protocol::service::ACTION_FAILED
+            && !reasons.contains(&line)
+        {
+            reasons.push(line);
+        }
+    }
+    if reasons.is_empty() {
+        wave_protocol::service::ACTION_FAILED.into()
+    } else {
+        reasons.join("; ")
     }
 }
 /// Rejections an older helper gives for the newer lock input or action.
@@ -1983,10 +2029,7 @@ fn launch_transport(
     let result = child.wait()?;
     let _ = errors.join();
     control.lock().unwrap().input.take();
-    anyhow::ensure!(
-        result.success(),
-        "Connection stopped unexpectedly; inspect Logs before retrying"
-    );
+    anyhow::ensure!(result.success(), CONNECTION_STOPPED);
     Ok(())
 }
 fn window_settings() -> iced::window::Settings {

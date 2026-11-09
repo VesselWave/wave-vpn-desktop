@@ -226,10 +226,7 @@ fn forum_d06_helper_refusal_explains_the_failed_connection() {
         let mut app = app();
         running(&mut app, "Achernar");
         app.transport_line(line.into());
-        end(
-            &mut app,
-            "Connection stopped unexpectedly; inspect Logs before retrying",
-        );
+        end(&mut app, CONNECTION_STOPPED);
         let error = app.error.clone().unwrap();
         assert!(error.contains(expected), "{line} -> {error}");
         assert!(error.contains("sudo wave-vpn service-install"), "{error}");
@@ -515,4 +512,87 @@ fn forum_u2404_b09_removed_app_says_so_instead_of_offering_setup() {
     let error = app.error.clone().unwrap();
     assert!(error.contains("uninstalled"), "{error}");
     assert!(app.retry_at.is_none());
+}
+
+// U2404 B-04: a failure shows the worker's own reason instead of "inspect
+// Logs", and the client's circular exit line is not added to Logs.
+#[test]
+fn forum_u2404_b04_failure_banner_names_the_reason() {
+    let mut app = app();
+    running(&mut app, "Achernar");
+    app.since = Some(Instant::now());
+    app.status = "Connected".into();
+    app.retryable = true;
+    app.transport_line("Error: WireGuard handshake expired".into());
+    app.transport_line(format!("Error: {}", wave_protocol::service::ACTION_FAILED));
+    end(&mut app, CONNECTION_STOPPED);
+    assert_eq!(app.error.as_deref(), Some("WireGuard handshake expired"));
+    assert_eq!(app.status, "Reconnecting…");
+    assert!(
+        app.logs.iter().all(|l| !l.text.contains("inspect Logs")
+            && !l.text.contains(wave_protocol::service::ACTION_FAILED)),
+        "no circular line in Logs"
+    );
+    // The reason belongs to its own session: a later failure without one
+    // does not repeat it.
+    running(&mut app, "Achernar");
+    end(&mut app, CONNECTION_STOPPED);
+    assert_eq!(app.error.as_deref(), Some(CONNECTION_STOPPED));
+    assert!(!CONNECTION_STOPPED.contains("inspect Logs"));
+    // Privileged actions (Recover, Network Lock) report the helper's reason.
+    assert_eq!(
+        helper_failure(
+            "Error: Networking action failed\n",
+            "{\"event\":\"protection\",\"enabled\":true}\nError: Recovery incomplete: Wave routes remain for -4\n"
+        ),
+        "Recovery incomplete: Wave routes remain for -4"
+    );
+    assert_eq!(
+        helper_failure("Error: Networking action failed\n", ""),
+        wave_protocol::service::ACTION_FAILED
+    );
+}
+
+// U2404 B-05: Disconnect (also from the tray) and a successful Recover clear
+// the previous failure's banner; a failed Recover still explains itself.
+#[test]
+fn forum_u2404_b05_disconnect_and_recover_clear_a_stale_error() {
+    let mut app = app();
+    running(&mut app, "Achernar");
+    app.retryable = true;
+    end(&mut app, "First WireGuard handshake timed out");
+    assert!(app.error.is_some() && app.retry_at.is_some());
+    app.sender
+        .send(Event::Tray(tray::Action::Disconnect))
+        .unwrap();
+    let _ = app.update(Message::Tick);
+    assert!(app.error.is_none(), "{:?}", app.error);
+
+    app.preview = false; // Recover is hooked, not run.
+    app.test_helper = Some(true);
+    app.error = Some("Connection stopped unexpectedly".into());
+    let _ = app.update(Message::Recover);
+    assert_eq!(app.test_privileged.last().unwrap().0, "recover");
+    app.sender
+        .send(Event::Notice(
+            None,
+            Ok("Tunnel resources restored; Network Lock retained\n".into()),
+        ))
+        .unwrap();
+    let _ = app.update(Message::Tick);
+    assert!(app.error.is_none(), "{:?}", app.error);
+
+    app.error = Some("Connection stopped unexpectedly".into());
+    let _ = app.update(Message::Recover);
+    app.sender
+        .send(Event::Notice(
+            None,
+            Err("Recovery incomplete: Wave routes remain for -4".into()),
+        ))
+        .unwrap();
+    let _ = app.update(Message::Tick);
+    assert!(app
+        .error
+        .as_deref()
+        .is_some_and(|e| e.contains("Recovery incomplete")));
 }

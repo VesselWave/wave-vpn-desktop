@@ -27,6 +27,9 @@ pub fn authorized_uid() -> Option<u32> {
         None
     }
 }
+/// The client's own exit error when the helper reports failure. The helper's
+/// lines before it carry the actual reason.
+pub const ACTION_FAILED: &str = "Networking action failed";
 /// Setup needs pkexec (polkit); some minimal installs lack it.
 pub const PKEXEC_MISSING: &str =
     "Administrator authorization is unavailable because pkexec (polkit) is not installed";
@@ -494,10 +497,7 @@ mod linux {
             let line = line?;
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) {
                 if value["event"] == "service-exit" {
-                    ensure!(
-                        value["success"] == true,
-                        "Networking action failed; inspect Logs"
-                    );
+                    ensure!(value["success"] == true, crate::service::ACTION_FAILED);
                     return Ok(());
                 }
             }

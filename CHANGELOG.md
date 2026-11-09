@@ -17,6 +17,8 @@
 - Ubuntu 24.04 distribution test fixes ([report](docs/qa/DISTRO-UBUNTU-2404.md)):
   - A package upgrade while connected now updates the networking helper at once without dropping the connection, instead of leaving the old helper in place until someone ran `sudo wave-vpn service-install`; a replaced helper restarts itself once idle (B-01)
   - NetworkManager no longer adopts the tunnel link, so GNOME stops showing "Connection failed" on every Disconnect, server switch and reconnect attempt (B-02)
+  - A failed connection shows its reason (for example "WireGuard handshake expired") instead of "Connection stopped unexpectedly; inspect Logs before retrying", and Logs no longer get the circular "Networking action failed; inspect Logs" line; failed Recover and Network Lock actions show the helper's reason too (B-04)
+  - Disconnect (also from the tray) and a successful Recover clear the previous failure's banner (B-05)
   - Uninstalling closes open Wave VPN windows instead of leaving one that offers first-time setup; a window whose app was removed says so (B-09). The uninstall message and user guide say that preferences, including the Network Lock choice, are kept even by `apt purge` (B-13)
 
 ## 0.1.3 · 2026-11-05 · early release
