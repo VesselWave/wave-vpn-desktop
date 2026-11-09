@@ -788,3 +788,25 @@ fn forum_u2404_b14_saved_choice_says_the_lock_returns_on_connect() {
     app.prefs.options.set("netlock", "false".into());
     assert!(!crate::views::network_lock_summary(&app).contains("connect"));
 }
+
+// U2404 B-21: the Countries view said "1 servers", showed "CZ" instead of a
+// name and ordered countries by code (Canada, Switzerland, CZ…).
+#[test]
+fn forum_u2404_b21_country_list_uses_names_plurals_and_name_order() {
+    use crate::views::{by_country_name, country, servers_label};
+    assert_eq!(servers_label(1), "1 server");
+    assert_eq!(servers_label(0), "0 servers");
+    assert_eq!(servers_label(12), "12 servers");
+    // Every country in the pinned example manifest has a name.
+    let manifest = include_str!("../../protocol-data/fixtures/eddie-manifest.xml");
+    for code in manifest.split("country_code=\"").skip(1) {
+        let code = &code[..code.find('"').unwrap()];
+        assert_ne!(country(code), code.to_uppercase(), "{code} has no name");
+    }
+    let groups = BTreeMap::from([("ca", 1), ("ch", 2), ("cz", 3), ("at", 4)]);
+    let names: Vec<_> = by_country_name(groups)
+        .into_iter()
+        .map(|(code, _)| country(code))
+        .collect();
+    assert_eq!(names, ["Austria", "Canada", "Czechia", "Switzerland"]);
+}

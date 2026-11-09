@@ -73,9 +73,47 @@ pub fn country(c: &str) -> String {
         "lv" => "Latvia",
         "au" => "Australia",
         "br" => "Brazil",
+        "cz" => "Czechia",
+        "nz" => "New Zealand",
+        "rs" => "Serbia",
+        "tw" => "Taiwan",
+        "dk" => "Denmark",
+        "pl" => "Poland",
+        "pt" => "Portugal",
+        "hu" => "Hungary",
+        "lt" => "Lithuania",
+        "ua" => "Ukraine",
+        "md" => "Moldova",
+        "gr" => "Greece",
+        "is" => "Iceland",
+        "lu" => "Luxembourg",
+        "sk" => "Slovakia",
+        "si" => "Slovenia",
+        "hr" => "Croatia",
+        "tr" => "Turkey",
+        "il" => "Israel",
+        "za" => "South Africa",
+        "mx" => "Mexico",
+        "ar" => "Argentina",
+        "cl" => "Chile",
+        "in" => "India",
+        "kr" => "South Korea",
+        "my" => "Malaysia",
+        "th" => "Thailand",
+        "ae" => "United Arab Emirates",
         _ => return c.to_uppercase(),
     }
     .into()
+}
+/// "1 server", "2 servers".
+pub fn servers_label(count: usize) -> String {
+    format!("{count} server{}", if count == 1 { "" } else { "s" })
+}
+/// Country groups in the order of their displayed names, not their codes.
+pub fn by_country_name<V>(groups: BTreeMap<&str, V>) -> Vec<(&str, V)> {
+    let mut groups: Vec<_> = groups.into_iter().collect();
+    groups.sort_by_cached_key(|(code, _)| (country(code), code.to_string()));
+    groups
 }
 pub fn shell(app: &Wave) -> Element<'_, Message> {
     let rail = app.width < 760.;
@@ -532,9 +570,7 @@ fn servers(app: &Wave) -> Element<'_, Message> {
         button(icon(Icon::Refresh, 16., Ink::Muted))
             .style(theme::ghost)
             .on_press_maybe(app.manual_refresh_allowed().then_some(Message::Refresh)),
-        text(format!("{count} servers"))
-            .size(13)
-            .style(theme::muted),
+        text(servers_label(count)).size(13).style(theme::muted),
     ]
     .spacing(12)
     .align_y(Alignment::Center);
@@ -601,7 +637,7 @@ fn servers(app: &Wave) -> Element<'_, Message> {
         for s in list {
             groups.entry(&s.country).or_default().push(s);
         }
-        for (code, servers) in groups {
+        for (code, servers) in by_country_name(groups) {
             let load = servers.iter().map(|s| s.load()).sum::<f64>() / servers.len() as f64;
             rows = rows.push(
                 button(
@@ -609,7 +645,7 @@ fn servers(app: &Wave) -> Element<'_, Message> {
                         text(code.to_uppercase()).font(theme::MONO).width(40),
                         column![
                             text(country(code)).size(14).font(theme::MEDIUM),
-                            text(format!("{} servers", servers.len()))
+                            text(servers_label(servers.len()))
                                 .size(12)
                                 .style(theme::muted)
                         ]
