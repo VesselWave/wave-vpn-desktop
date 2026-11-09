@@ -51,9 +51,9 @@ Cached guest addresses and pinned SSH host keys live in `.lab/state/`.
 
 ```sh
 lab/labctl list
-lab/labctl template-create ubuntu2404          # build + seal a template (once)
+lab/labctl template-create ubuntu2404          # build + seal a template (once; see Templates)
 lab/labctl clone wave-tpl-ubuntu2404 wave-u1   # linked clone + "clean-desktop" snapshot
-lab/labctl start wave-u1 --wait gnome
+lab/labctl start wave-u1 --wait desktop        # or --wait gnome on GNOME guests
 lab/labctl run wave-u1 'systemctl is-system-running'
 lab/labctl run wave-u1 --root --json -- nft list ruleset
 lab/labctl run wave-u1 --session 'gsettings get org.gnome.desktop.interface color-scheme'
@@ -63,7 +63,8 @@ lab/labctl screenshot wave-u1 desktop.png
 lab/labctl key wave-u1 super            # also ctrl-alt-t, ret, esc, f10 ...
 lab/labctl type wave-u1 'wave-vpn-gui'
 lab/labctl click wave-u1 640 400 [--button right] [--double]
-lab/labctl wait wave-u1 agent|ip|ssh|greeter|session|gnome [--timeout 300]
+lab/labctl wait wave-u1 agent|ip|ssh|greeter|session|gnome|desktop [--timeout 300]
+lab/labctl login-mode wave-u1 password --reboot && lab/labctl dm-login wave-u1
 lab/labctl snapshot wave-u1 before-install [--vmstate]
 lab/labctl rollback wave-u1 clean-desktop [--start]
 lab/labctl snapshots wave-u1
@@ -88,12 +89,21 @@ lab/labctl destroy wave-u1
   on GNOME Wayland, at the greeter and with guest networking blocked. Pixel
   coordinates refer to the screenshot. `type` uses a US keyboard map.
 * **wait gnome** requires an active Wayland session of the guest user with
-  `gnome-shell` running; `greeter` waits for the GDM greeter session.
-* **login-mode NAME autologin|password [--reboot]** switches GDM.
-  **gdm-login NAME** waits for the greeter and types the private password, which
-  exercises PAM and unlocks the login keyring. Typical PAM keyring run:
-  `clone` → `start` → `login-mode password --reboot` → `gdm-login`. Do the first
-  graphical login with the password so the login keyring gets that password.
+  `gnome-shell` running. **wait desktop** accepts any active Wayland or X11
+  session of the guest user on the current VT running `gnome-shell`,
+  `plasmashell` or `cinnamon`. `greeter` waits for the display manager's greeter
+  session (GDM, SDDM or LightDM).
+* **login-mode NAME autologin|password [--reboot]** switches the display
+  manager it finds: GDM (`/etc/gdm3/daemon.conf` on Debian, `custom.conf`
+  elsewhere), SDDM (`/etc/sddm.conf.d/zz-wave-lab-autologin.conf`, plus
+  `DISPLAYMANAGER_AUTOLOGIN` on openSUSE) or LightDM
+  (`/etc/lightdm/lightdm.conf.d/90-wave-lab-autologin.conf`).
+  **dm-login NAME** (alias `gdm-login`) waits for the greeter and types the
+  private password, which exercises PAM and unlocks the login keyring or
+  KWallet. Typical PAM keyring run: `clone` → `start` → `login-mode password
+  --reboot` → `dm-login`. Do the first graphical login with the password so the
+  keyring gets that password (Debian 13: see the lab notes, the first session
+  does not export it yet).
 * **build-packages SRC OUT** builds `.deb`, `.rpm` and Arch packages outside the
   test guests, in a `wave-builder` linked clone of the Ubuntu 24.04 template
   (created and set up on first use with `builder/setup-ubuntu.sh`: build tools,
@@ -110,54 +120,112 @@ lab/labctl destroy wave-u1
 
 ### Templates
 
-`template-create ubuntu2404|ubuntu2604|fedora45` downloads the pinned Ubuntu cloud image to the
-host's `image_dir`, checks its SHA-256, creates the VM on the configured storage
-(q35, OVMF without enrolled keys, virtio-scsi qcow2, virtio-gpu, USB tablet,
-`serial0` socket, guest agent), boots it once with Proxmox cloud-init (key-only
-login), reads the SSH host key (and, when printed, the address) from the serial
-console, otherwise finds the address by MAC in the host's neighbour table, then
-runs `templates/ubuntu-provision.sh install` (or `fedora-provision.sh`) as a
-transient systemd unit. The Ubuntu script provides:
+`template-create DISTRO` builds and seals one template. Cloud-image distros
+(`ubuntu2404`, `ubuntu2604`, `fedora45`, `debian13`, `opensuse-tw`, `arch`)
+download the pinned image to the host's `image_dir`, check its SHA-256 or
+SHA-512, create the VM on the configured storage (q35, OVMF without enrolled
+keys, virtio-scsi qcow2, virtio-gpu, USB tablet, `serial0` socket, guest agent),
+boot it once with Proxmox cloud-init (key-only login), read the SSH host key
+(and, when printed, the address) from the serial console, otherwise find the
+address by MAC in the host's neighbour table. Images that print no host key
+(openSUSE) are pinned with `ssh-keyscan` from the Proxmox host on first use. It
+then runs `templates/DISTRO-provision.sh install` as a transient systemd unit,
+reboots, waits for the desktop session, saves a screenshot to the private
+artifacts directory, runs `seal` (removes SSH host keys, machine-id, DHCP
+leases, keyrings/wallets, logs and cloud-init state, trims the disk), powers off
+and converts the VM to a template. Each clone's first boot generates SSH host
+keys and takes its hostname from the SMBIOS serial that `clone` sets.
 
-* `ubuntu-desktop` with GDM and GNOME on Wayland, the Ubuntu AppIndicators
-  extension, gnome-keyring, the HWE kernel on 24.04 (as installed by current
-  point-release media) with `linux-modules-extra` (netem);
-* NetworkManager for every device through the installer's netplan stub
-  (`renderer: NetworkManager`), systemd-resolved, `systemd-networkd` and its
-  `wait-online` unit disabled/masked, cloud-init disabled afterwards;
-* the `wave-lab` user in the usual desktop groups with a generated password;
-* qemu-guest-agent, a serial getty on `ttyS0`, a persistent journal, a 2 GiB
-  `/swap.img`;
-* test tools: tcpdump, tshark, nftables, wireguard-tools, dnsutils, curl,
-  conntrack, jq, iproute2, libsecret-tools, python3. No Wave VPN, no Rust.
+`mint22` has no cloud image. labctl installs the signed live ISO with the
+distribution's own installer: it extracts the casper kernel and initrd on the
+host, appends a filled copy of `templates/mint-preseed.cfg` (crypted password,
+lab public key) to the initrd as an extra cpio, boots the kernel directly with
+`automatic-ubiquity` and the ISO attached read-only, and waits for Ubiquity to
+power off. Ubiquity erases the disk with its default layout, creates the user
+with autologin and, in its `success_command`, installs openssh-server and the
+guest agent and authorises the lab key. The working files and the VM `args` are
+removed, the installed system boots, and `mint-provision.sh` adds the lab
+tools as on the other templates. The desktop is exactly what the installer put
+there. The host needs `isoinfo` and `openssl`.
 
-It reboots, waits for the GNOME Wayland session, saves a screenshot to the
-private artifacts directory, runs `seal` (removes SSH host keys, machine-id,
-DHCP leases, keyrings, logs and cloud-init state, trims the disk), powers off and
-converts the VM to a template. Each clone's first boot generates SSH host keys
-and takes its hostname from the SMBIOS serial that `clone` sets.
+| Template | Desktop and display manager | Network and DNS | Firewall | Secret Service |
+| --- | --- | --- | --- | --- |
+| `wave-tpl-ubuntu2404`, `-ubuntu2604` | `ubuntu-desktop`, GNOME Wayland, GDM | NetworkManager via netplan stub, systemd-resolved stub | ufw not installed | gnome-keyring |
+| `wave-tpl-fedora45` | Workstation, GNOME Wayland, GDM | NetworkManager, systemd-resolved stub | firewalld `FedoraWorkstation` | gnome-keyring |
+| `wave-tpl-debian13` | tasks `desktop` + `gnome-desktop`, GNOME Wayland, GDM | NetworkManager writes a plain `/etc/resolv.conf`; no resolved, netplan or networkd; ifupdown knows only `lo` | none active (nftables installed, service off) | gnome-keyring |
+| `wave-tpl-opensuse-tw` | patterns `kde kde_plasma x11 enhanced_base`, Plasma Wayland, SDDM | NetworkManager writes a plain `/etc/resolv.conf`; no resolved, no wicked | firewalld `public` (ssh, dhcpv6-client) | KWallet (`ksecretd` from kwalletd6, unlocked by pam_kwallet) |
+| `wave-tpl-arch` | archinstall KDE profile set, Plasma Wayland, SDDM | NetworkManager + systemd-resolved stub | none | KWallet (pam_kwallet in SDDM) |
+| `wave-tpl-mint22` | Linux Mint 22.3 Cinnamon (X11), LightDM slick-greeter | NetworkManager via netplan stub, systemd-resolved stub | ufw installed, inactive | gnome-keyring |
 
-`fedora-provision.sh` installs `workstation-product-environment` on Fedora
-Cloud Base, switches the release identity to Workstation (os-release, presets
-and the `FedoraWorkstation` firewalld zone), keeps SELinux enforcing and
-firewalld active, enables sshd, the guest agent and a serial getty, and installs
-the same test tools (`wireshark-cli`, `bind-utils`, `conntrack-tools`,
-`iproute-tc`, `kernel-modules-extra`, `libsecret`). The AppIndicator extension is
-installed but, as on stock Fedora, not enabled.
+Every template has the `wave-lab` user ("Wave Lab") in the distribution's usual
+desktop groups with the private password, qemu-guest-agent with guest-exec, a
+serial getty on `ttyS0`, a persistent journal, the test tools (tcpdump, tshark,
+nftables, wireguard-tools, dig, curl, conntrack, jq, iproute2 with `tc` and
+`sch_netem`, `secret-tool`, python3), no Wave VPN and no Rust.
+
+Per-distro provisioning notes:
+
+* `ubuntu-provision.sh`: `ubuntu-desktop`, the Ubuntu AppIndicators extension,
+  the HWE kernel on 24.04 (as installed by current point-release media) with
+  `linux-modules-extra`; NetworkManager for every device through the
+  installer's netplan stub (`renderer: NetworkManager`), `systemd-networkd` and
+  its `wait-online` unit disabled/masked, cloud-init disabled; 2 GiB `/swap.img`.
+* `fedora-provision.sh`: `workstation-product-environment` on Fedora Cloud
+  Base, release identity switched to Workstation (os-release, presets and the
+  `FedoraWorkstation` firewalld zone), SELinux enforcing, firewalld active. The
+  AppIndicator extension is installed but, as on stock Fedora, not enabled.
+* `debian-provision.sh`: the `generic` image (standard kernel with DRM and
+  netem, not the `genericcloud` cloud kernel), tasksel's `task-desktop` and
+  `task-gnome-desktop` with Recommends, then the d-i desktop network layout:
+  netplan, systemd-networkd, systemd-resolved and cloud-init removed,
+  `/etc/network/interfaces` with only `lo`, NetworkManager writing
+  `/etc/resolv.conf`; 2 GiB `/swapfile`. No AppIndicator extension (stock).
+* `opensuse-provision.sh`: Minimal-VM ships zypp drop-ins that skip recommended
+  packages and docs; same-named files in `/etc/zypp/zypp.conf.d` restore the
+  installed-system defaults before the patterns, and `install-new-recommends`
+  completes earlier installs. `kernel-default` replaces `kernel-default-base`.
+  SDDM runs through `display-manager-legacy.service` and the
+  `default-displaymanager` alternative. SELinux stays enforcing. cloud-init
+  removed; 2 GiB `/swapfile`.
+* `arch-provision.sh`: `plasma-meta`, konsole, kwrite, dolphin, ark, sddm,
+  PipeWire, NetworkManager, `en_US.UTF-8`, zram swap (archinstall defaults;
+  the image's 512 MiB btrfs swap file stays). Arch has no default resolver
+  stack: systemd-resolved (already enabled in the image) is kept in stub mode
+  and NetworkManager feeds it, so Arch covers Plasma with resolved while
+  openSUSE covers Plasma without it. Cloud-image boot settings are removed:
+  `net.ifnames=0`, `systemd-time-wait-sync` (held sshd until NTP synced) and
+  the per-boot `pacman-init`. cloud-init removed.
+* `mint-provision.sh`: full upgrade (as the Update Manager would do once), the
+  test tools, LightDM autologin drop-in. The installer leaves `casper`
+  installed, so `casper-md5check.service` fails on every boot and
+  `systemctl is-system-running` reports `degraded`; this is the stock state.
 
 If provisioning succeeds but a later step fails, fix the guest and resume with
 `labctl template-seal NAME DISTRO` instead of starting over.
 
 Deliberate deviations from a stock desktop install, for unattended testing:
-GDM autologin by default (switch with `login-mode`); passwordless `sudo` for the
-test user; apt-daily, apt-daily-upgrade and unattended-upgrades disabled and
-snap refreshes held, so the system does not change under a test; screen lock and
-idle blanking disabled and apport crash dialogs off; the kernel console also on
-`ttyS0`; first-login welcome/tour dialogs suppressed. Fedora additionally makes
-only the `virt_qemu_ga_t` SELinux domain permissive (guest-exec children would
-otherwise be confined and unable to inspect the session), clears the guest-agent
-RPC filter, and disables `dnf-makecache.timer` and GNOME Software downloads.
-Re-enable any of these inside a clone when a test needs them.
+display-manager autologin by default (switch with `login-mode`); passwordless
+`sudo` for the test user; no background package activity (apt-daily timers and
+unattended-upgrades off, snap refreshes held, `dnf-makecache.timer` and GNOME
+Software downloads off, Discover's update notifier and Mint's Update Manager
+not autostarted, Mint's automation timers off); screen lock, idle blanking and
+idle suspend disabled (dconf on GNOME/Cinnamon, `kscreenlockerrc` and
+`powerdevilrc` in `/etc/xdg` on Plasma) and apport crash dialogs off; the kernel
+console also on `ttyS0`; first-login welcome dialogs suppressed with each
+desktop's own stamp (`gnome-initial-setup-done`, Plasma Welcome Center's
+`LastSeenVersion`, the openSUSE welcome launcher's `launched` file, Mint's
+`mintwelcome/norun.flag`). Fedora and openSUSE make only the `virt_qemu_ga_t`
+SELinux domain permissive (guest-exec children would otherwise be confined and
+unable to inspect the session) and clear the guest agent's RPC filter, which
+blocks guest-exec by default on both. Debian/openSUSE use a swap file where the
+installer would make a partition; openSUSE's root is the image's XFS, not the
+installer's btrfs with snapper. Re-enable any of these inside a clone when a
+test needs them.
+
+When changing a template image pin, verify the distribution's published
+signature where there is one and record it in the lab notes.
+Tumbleweed and Arch mirrors drop old snapshots, so update those pins (URL and
+checksum) before rebuilding.
 
 ### Legacy scripts
 
