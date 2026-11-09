@@ -86,10 +86,13 @@ AutoSuspendAction=0
 EOF
     home=$(getent passwd "$user" | cut -d: -f6)
     install -d -o "$user" -g "$(id -gn "$user")" "$home/.config" "$home/.config/autostart"
-    for app in org.kde.plasma-welcome opensuse-welcome org.opensuse.opensuse_welcome org.kde.discover.notifier; do
+    for app in org.kde.plasma-welcome org.kde.discover.notifier; do
         printf '[Desktop Entry]\nType=Application\nName=%s\nHidden=true\n' "$app" > "$home/.config/autostart/$app.desktop"
     done
-    chown -R "$user:$(id -gn "$user")" "$home/.config"
+    # opensuse-welcome-launcher shows once per version unless this stamp says it ran.
+    install -d "$home/.local/share/opensuse-welcome"
+    echo 1 > "$home/.local/share/opensuse-welcome/launched"
+    chown -R "$user:$(id -gn "$user")" "$home/.config" "$home/.local"
 
     # Recovery channels. openSUSE blocks guest-exec in /usr/etc/sysconfig/qemu-ga
     # and guest-exec children inherit the confined virt_qemu_ga_t domain; the lab
