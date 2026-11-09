@@ -179,10 +179,10 @@ No occurrence in 6 installs. As in round 2, every install here was made after bo
 - openSUSE was a quick recheck by plan: C4 and C6 to C10 were not run there.
 - N-04 was not investigated further; on Fedora the device came back within 2 s.
 - The guest-agent fallback stopped answering once on Fedora (agent active, SSH blocked by the lock); turning the lock off from the GUI restored SSH. Lab tooling, not Wave.
-- No speed tests; at most one live AirVPN session at a time (two guests in parallel at most). All clones were destroyed at the end.
+- No speed tests; at most two live AirVPN sessions at once (two guests in parallel), on the existing device. All clones were destroyed at the end.
 
 ## Summary
 
-- Distributions: 5. Matrix cells run: 46 (Ubuntu 10, Fedora 9 + N/A tray, Arch 10, Mint 10, openSUSE 4 + 3 extra checks). FAIL: 1 (Ubuntu 26.04 C3 → F-01); everything else PASS, with N-04, F-02 and F-03 noted where seen.
+- Distributions: 5. Matrix cells run: 43 (Ubuntu 10, Fedora 9 plus the N/A tray cell, Arch 10, Mint 10, openSUSE 4). FAIL: 1 (Ubuntu 26.04 C3 → F-01); everything else PASS, with N-04, F-02 and F-03 noted where seen.
 - Fixed and confirmed: N-03 (KWallet on Arch and openSUSE), R-01 (Ubuntu 26.04); B-14 to B-22 behaviour not regressed in the paths exercised (DNS ownership on resolved and plain resolv.conf, firewalld and ufw coexistence, crash cleanup).
 - New bugs: F-01 blocker (Ubuntu 26.04), F-02 low (reopens N-05), F-03 low.
