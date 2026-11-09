@@ -186,3 +186,16 @@ No occurrence in 6 installs. As in round 2, every install here was made after bo
 - Distributions: 5. Matrix cells run: 43 (Ubuntu 10, Fedora 9 plus the N/A tray cell, Arch 10, Mint 10, openSUSE 4). FAIL: 1 (Ubuntu 26.04 C3 → F-01); everything else PASS, with N-04, F-02 and F-03 noted where seen.
 - Fixed and confirmed: N-03 (KWallet on Arch and openSUSE), R-01 (Ubuntu 26.04); B-14 to B-22 behaviour not regressed in the paths exercised (DNS ownership on resolved and plain resolv.conf, firewalld and ufw coexistence, crash cleanup).
 - New bugs: F-01 blocker (Ubuntu 26.04), F-02 low (reopens N-05), F-03 low.
+
+## Verification after fe44867/3f531fe
+
+Lab build `3f531fe` (unsigned `.deb`, version `0.1.3-1`) installed with `apt` on fresh linked clones (`wave-v-ubuntu2604`, `wave-v-ubuntu2404`, `wave-v-mint22`), all destroyed afterwards. Ubuntu guests used a password login at GDM (`login-mode password` + `dm-login`); sign-in was typed into the GUI form from the private credentials file by a script, nothing printed. Network checks are text only (`wg show`, `curl -4`/`-6` to AirVPN's "what is my IP" API, `tcpdump` on the physical NIC, `journalctl -k`, `wave-vpn network-status`).
+
+| Check | Result | Notes |
+| --- | --- | --- |
+| F-01: Ubuntu 26.04, stock AppArmor (`wg` profile enforced, no `/etc/apparmor.d/local/wg`) | **PASS** | Best server connected (Xamidimura); `wg show wavevpn0` handshake 4 s old; no `apparmor="DENIED"` for `wg` in `journalctl -k` (0, checked after every step); IPv4 and IPv6 exits both AirVPN; `getent`/`dig` resolved with 0 port 53/853 packets on `ens18`. Switched to Khambalia: same results (handshake 7 s, both exits Khambalia, 0 port-53 packets). Lock on, then Disconnect: `wavevpn0` gone, IPv4, IPv6 and DNS blocked. Lock off: `inet wave_vpn` table removed, `network-status` `enabled:false`, HTTPS and DNS back. |
+| F-01 regression: Ubuntu 24.04 | **PASS** | Connected (Xamidimura), handshake 4 s, both exits AirVPN, 0 port-53 packets on the NIC; switched to Khambalia (handshake 7 s); Disconnect removed `wavevpn0`, exit no longer AirVPN, lock off. |
+| F-02: Mint 22.3 Cinnamon X11, `WAYLAND_DISPLAY=wayland-missing wave-vpn-gui` in the session (`DISPLAY=:0`, no Wayland socket) | **PASS** | No panic; window "Wave VPN" mapped on X11 within 2 s (`xdotool search`, `wmctrl -l`); closed cleanly. Only stderr output: Mesa's `libEGL warning: DRI3 error` (virtual GPU, harmless). |
+| F-02: `DISPLAY=:97 WAYLAND_DISPLAY=wayland-missing wave-vpn-gui` | **PASS** | Exit 1, `wave-vpn-gui: no graphical display found (no Wayland socket or reachable X11 DISPLAY). Open Wave VPN from your desktop session, or use the wave-vpn command.` |
+
+F-01 and F-02 are fixed. No new issues. Two live sessions at most (one at a time here), on the existing device.
