@@ -848,3 +848,28 @@ fn forum_u2404_b18_locked_keyring_offers_retry_instead_of_looking_signed_out() {
     let _ = app.update(Message::RestoreAccount);
     assert!(!app.restore_failed && app.error.is_none());
 }
+
+// U2404 B-15: with ufw denying outgoing traffic every attempt timed out with
+// the same generic banner. From the third consecutive first-handshake
+// timeout the banner suggests a firewall blocking outgoing UDP and names the
+// port; a handshake or another failure starts the count again.
+#[test]
+fn forum_u2404_b15_repeated_handshake_timeouts_suggest_a_firewall() {
+    let mut app = app();
+    let port = app.manifest.as_ref().unwrap().modes[0].port;
+    for attempt in 1..=3 {
+        running(&mut app, "Achernar");
+        app.retryable = true;
+        app.transport_line(format!("Error: {HANDSHAKE_TIMED_OUT}"));
+        end(&mut app, CONNECTION_STOPPED);
+        let banner = app.error.clone().unwrap();
+        assert!(banner.starts_with(HANDSHAKE_TIMED_OUT), "{banner}");
+        assert_eq!(banner.contains("firewall"), attempt == 3, "{banner}");
+    }
+    let banner = app.error.clone().unwrap();
+    assert!(banner.contains(&format!("UDP port {port}")), "{banner}");
+    // A successful handshake resets the count.
+    running(&mut app, "Achernar");
+    app.transport_line(r#"{"event":"connected"}"#.into());
+    assert_eq!(app.handshake_timeouts, 0);
+}

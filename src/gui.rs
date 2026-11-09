@@ -223,6 +223,8 @@ struct Wave {
     /// The privileged action awaiting its result (one at a time).
     privileged_action: Option<&'static str>,
     retry_attempts: u32,
+    /// Consecutive attempts that never got a first handshake (U2404 B-15).
+    handshake_timeouts: u32,
     diagnostics: Option<String>,
     diagnostics_path: String,
     last_failure: wave_protocol::diagnostics::Failure,
@@ -339,6 +341,7 @@ impl Wave {
             worker_error: None,
             privileged_action: None,
             retry_attempts: 0,
+            handshake_timeouts: 0,
             diagnostics: None,
             diagnostics_path: String::new(),
             last_failure: Default::default(),
@@ -940,11 +943,19 @@ impl Wave {
                                 } else {
                                     message
                                 };
-                                let message = helper
+                                let mut message = helper
                                     .or_else(|| helper_problem(&message))
                                     .map(str::to_owned)
                                     .or_else(|| self.checks.failure().map(str::to_owned))
                                     .unwrap_or(message);
+                                if message.contains(HANDSHAKE_TIMED_OUT) {
+                                    self.handshake_timeouts += 1;
+                                    if self.handshake_timeouts >= FIREWALL_HINT_AFTER {
+                                        message.push_str(&self.firewall_hint());
+                                    }
+                                } else {
+                                    self.handshake_timeouts = 0;
+                                }
                                 self.error = Some(message.clone());
                                 self.log(Level::Error, message);
                             } else {
@@ -1282,6 +1293,7 @@ impl Wave {
                 // The user's choice supersedes an earlier failure's banner.
                 self.error = None;
                 self.retry_attempts = 0;
+                self.handshake_timeouts = 0;
                 if self.control.is_none() {
                     self.status = "Disconnected".into();
                 }
@@ -1891,7 +1903,26 @@ impl Wave {
         };
         self.log(level, line);
     }
+    /// U2404 B-15: repeated first-handshake timeouts with no reply usually
+    /// mean outgoing UDP is blocked (ufw "deny outgoing", a network policy).
+    fn firewall_hint(&self) -> String {
+        let port = self.manifest.as_ref().and_then(|m| {
+            let port = self.prefs.options.get("port");
+            if port.is_empty() {
+                m.modes.first()
+            } else {
+                m.modes.iter().find(|mode| mode.port.to_string() == port)
+            }
+            .map(|mode| mode.port)
+        });
+        format!(
+            ". No reply from the server after {} attempts: a firewall on this computer (for example ufw with outgoing traffic denied) or on your network may block outgoing UDP{}.",
+            self.handshake_timeouts,
+            port.map(|p| format!(" port {p}")).unwrap_or_default()
+        )
+    }
     fn connected(&mut self) {
+        self.handshake_timeouts = 0;
         if self.since.is_none() {
             self.since = Some(Instant::now());
             self.connections += 1;
@@ -2071,6 +2102,8 @@ impl Drop for Wave {
 }
 /// A connection worker failed without a reason of its own (for example, it
 /// was killed). Usually the worker's "Error: …" line replaces it.
+const HANDSHAKE_TIMED_OUT: &str = "First WireGuard handshake timed out";
+const FIREWALL_HINT_AFTER: u32 = 3;
 const CONNECTION_STOPPED: &str = "Connection stopped unexpectedly";
 const KEEPING_SERVERS: &str = "Keeping the current server list";
 const EXEMPTION_RETRY_MIN: Duration = Duration::from_secs(30);
