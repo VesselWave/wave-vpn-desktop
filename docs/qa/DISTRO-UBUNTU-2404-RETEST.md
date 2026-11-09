@@ -8,7 +8,7 @@ Date: 2026-11-09. Tester: re-test agent. Line numbers refer to `8d32d4a`.
 
 | Label | Source | SHA-256 (.deb) | Used for |
 | --- | --- | --- | --- |
-| **FIX** | `main` `8d32d4a` plus lab-only docs (`b834e35`), lab build, unsigned | `72e4f5f8…a6be11f35` (prefix/suffix of `72e4f5f887fa…7b7188`) | everything unless stated |
+| **FIX** | `main` `8d32d4a` plus lab-only docs (`b834e35`), lab build, unsigned | `72e4f5f8…ee7b7188` | everything unless stated |
 | **REL** | signed published `v0.1.3` | `dacec39f…98710b` | upgrade baseline (step 1) |
 
 Both carry version `0.1.3-1`, so the "upgrade" is `apt install` reinstalling over the same version (same prerm/postinst path as an upgrade).
@@ -28,7 +28,7 @@ Evidence (outside Git): `.lab/evidence/u2404-retest/` in the private lab directo
 | 3 | B-03 NM connectivity check DNS | pending | |
 | 4 | B-04 failure reason | **PASS** | Link down: Logs `Error: WireGuard handshake expired` at ~126 s, then `Error: First WireGuard handshake timed out` per retry; chip **Reconnecting…**; banner shows the current reason ("First WireGuard handshake timed out" after the first retry, 14 s after expiry). No "Networking action failed" or "inspect Logs" line. Each failure is logged twice (R-02). Evidence `r4-logs-during-outage.png`, `r4-down-259s.png`. |
 | 5 | B-05 stale banner | tray part **PASS**; Recover part pending | Tray → Disconnect during Reconnecting: banner cleared, status **Blocking traffic**, no reconnect after the link came back (45 s). Evidence `r5-01`, `r5-02`, `r5-03`. |
-| 6 | B-06 worker kill | pending | |
+| 6 | B-06 worker kill | **PASS** | Lock on, connected, `kill -9` of the root transport-worker: `wavevpn0` gone and no 18520/18521 rules within 1 s; HTTPS 000, `wave_vpn` table kept, `enabled:true`; banner "The networking worker stopped unexpectedly. Wave removed its tunnel; Network Lock stays as it was.", chip **Blocking traffic**. Lock off: same cleanup within 1 s, HTTPS 200, default route via the physical NIC. The banner outlives Turn off Network Lock (R-03). Evidence `r6-*`. |
 | 7 | B-07 Servers button | **PASS** | Connected via Best to server X with Best selected: "Connected to X" (disabled). Another server Y selected: "Switch to Y"; switch works. Current server selected: "Connected to Y" (disabled); pressing it twice left the transport-worker PID and tunnel unchanged. Evidence `r2-05`, `r2-06`, `r2-12`, `r7-01`. |
 | 8 | B-09/B-13 uninstall | pending | |
 | 9 | B-10 version/args | pending | |
@@ -51,6 +51,10 @@ Evidence (outside Git): `.lab/evidence/u2404-retest/` in the private lab directo
 ### R-02 Each connection failure is logged twice — cosmetic
 
 - Logs show `Error: WireGuard handshake expired` immediately followed by `WireGuard handshake expired`, and the same pair for every `First WireGuard handshake timed out`. Probably the worker's `Error:` line and the GUI's own `Event::End` reason both go to the log (`src/gui.rs`, B-04 change in `eee576f`). Evidence `r4-logs-during-outage.png`.
+
+### R-03 Worker-lost banner stays after Turn off Network Lock — cosmetic
+
+- After B-06's banner ("…Network Lock stays as it was."), pressing **Turn off Network Lock** turns the lock off correctly but the red banner stays, now contradicting the sidebar's "Network Lock off". The B-05 fix clears the banner on Disconnect and Recover only (`src/gui.rs`, `eee576f`). Evidence `r6-03-lock-off.png`.
 
 ## Not run or limited
 
