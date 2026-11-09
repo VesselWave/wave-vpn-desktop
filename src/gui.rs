@@ -143,6 +143,34 @@ enum Event {
     NetworkStatus(u64, Result<wave_protocol::protection::Status, String>),
     DiagnosticsSaved(Result<(), String>),
 }
+/// How background threads report to the UI: the event, then a wake-up. The
+/// UI drains events on `Message::Tick`, and every message rebuilds and redraws
+/// the window, so it is woken per event instead of polling many times a second.
+#[derive(Clone)]
+struct EventSender(mpsc::Sender<Event>);
+impl EventSender {
+    fn send(&self, event: Event) -> Result<(), mpsc::SendError<Event>> {
+        self.0.send(event)?;
+        wake();
+        Ok(())
+    }
+}
+/// The running UI's wake-up channel (none in tests or before it starts).
+static WAKE: Mutex<Option<iced::futures::channel::mpsc::Sender<()>>> = Mutex::new(None);
+fn wake() {
+    if let Some(waker) = WAKE.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+        // Full means a wake-up is already pending; it drains this event too.
+        let _ = waker.try_send(());
+    }
+}
+fn wakeups() -> impl iced::futures::Stream<Item = Message> {
+    let (waker, wakeups) = iced::futures::channel::mpsc::channel(1);
+    *WAKE.lock().unwrap_or_else(|e| e.into_inner()) = Some(waker);
+    iced::futures::StreamExt::map(wakeups, |()| Message::Tick)
+}
+/// Drives timers (deadlines, retries, status queries) and the uptime display;
+/// events do not wait for it.
+const IDLE_TICK: Duration = Duration::from_secs(1);
 #[derive(Default)]
 struct WorkerControl {
     cancelled: bool,
@@ -245,7 +273,7 @@ struct Wave {
     error: Option<String>,
     activity: String,
     events: mpsc::Receiver<Event>,
-    sender: mpsc::Sender<Event>,
+    sender: EventSender,
     control: Option<Arc<Mutex<WorkerControl>>>,
     width: f32,
     system_dark: bool,
@@ -277,6 +305,7 @@ struct Wave {
 impl Wave {
     fn new() -> Self {
         let (sender, events) = mpsc::channel();
+        let sender = EventSender(sender);
         let prefs = Preferences::load();
         let draft = prefs.options.clone();
         let mut app = Self {
@@ -1914,7 +1943,14 @@ impl Wave {
     }
     fn subscription(&self) -> Subscription<Message> {
         Subscription::batch([
-            iced::time::every(Duration::from_millis(100)).map(|_| Message::Tick),
+            // Preview captures count fast ticks.
+            iced::time::every(if self.preview {
+                Duration::from_millis(100)
+            } else {
+                IDLE_TICK
+            })
+            .map(|_| Message::Tick),
+            Subscription::run(wakeups),
             iced::window::resize_events().map(|(_, s)| Message::Resize(s)),
             iced::window::close_requests().map(Message::Close),
             iced::system::theme_changes().map(Message::SystemTheme),
@@ -2021,7 +2057,7 @@ fn launch_transport(
     checks: Option<wave_protocol::checks::ProviderCheck>,
     bootstrap: Vec<Exemption>,
     control: Arc<Mutex<WorkerControl>>,
-    tx: mpsc::Sender<Event>,
+    tx: EventSender,
 ) -> anyhow::Result<()> {
     let executable = std::env::current_exe()?.with_file_name("wave-vpn");
     anyhow::ensure!(executable.is_file(), APP_REMOVED);

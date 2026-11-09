@@ -684,3 +684,19 @@ fn forum_u2404_b07_servers_button_does_not_reconnect_to_the_current_server() {
     let _ = app.update(Message::Connect);
     assert!(app.switching);
 }
+
+// U2404 B-11: every UI message rebuilds and redraws the window, so the app
+// no longer polls ten times a second. Background events wake it at once;
+// the idle tick only drives timers and the uptime display.
+#[test]
+fn forum_u2404_b11_background_events_wake_the_ui_without_fast_polling() {
+    use iced::futures::{FutureExt, StreamExt};
+    assert!(IDLE_TICK >= Duration::from_secs(1));
+    let mut wakeups = wakeups();
+    let app = app();
+    app.sender.send(Event::Line("worker line".into())).unwrap();
+    assert!(matches!(
+        wakeups.next().now_or_never(),
+        Some(Some(Message::Tick))
+    ));
+}

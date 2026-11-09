@@ -58,6 +58,7 @@ REQUIRED = (
     'forum_u2404_b09_removed_app_says_so_instead_of_offering_setup',
     'forum_u2404_b10_cli_and_gui_report_their_version',
     'forum_u2404_b10_gui_rejects_unknown_arguments',
+    'forum_u2404_b11_background_events_wake_the_ui_without_fast_polling',
 )
 RESULT = re.compile(r'^test (\S+) \.\.\. (ok|FAILED|ignored)\b')
 STATUS = {'ok': 'passed', 'FAILED': 'failed', 'ignored': 'skipped'}

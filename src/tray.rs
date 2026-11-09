@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! StatusNotifier tray, implemented independently using ksni's public API.
+#[cfg(target_os = "linux")]
 use super::Event;
-use std::sync::mpsc::Sender;
+use super::EventSender as Sender;
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 #[derive(Clone, Copy)]
 pub enum Action {
@@ -30,7 +31,7 @@ mod platform {
     };
     pub struct Item {
         pub state: Snapshot,
-        sender: Sender<Event>,
+        sender: Sender,
         visible: Arc<AtomicBool>,
     }
     impl Item {
@@ -130,7 +131,7 @@ mod platform {
             self.inner.shutdown();
         }
     }
-    pub fn spawn(sender: Sender<Event>) -> Option<Handle> {
+    pub fn spawn(sender: Sender) -> Option<Handle> {
         let visible = Arc::new(AtomicBool::new(true));
         match (Item {
             state: Snapshot::default(),
@@ -161,7 +162,7 @@ mod platform {
         }
         pub fn update(&mut self, _state: Snapshot) {}
     }
-    pub fn spawn(_sender: Sender<Event>) -> Option<Handle> {
+    pub fn spawn(_sender: Sender) -> Option<Handle> {
         None
     }
 }
