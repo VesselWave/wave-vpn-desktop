@@ -82,8 +82,13 @@ EOF
 
     # Recovery channels: guest agent and a serial getty.
     systemctl enable qemu-guest-agent.service serial-getty@ttyS0.service 2>/dev/null || true
+    # Cloud-image-only boot settings: classic NIC names, waiting for NTP before
+    # time-sync.target (holds sshd for a minute) and a keyring init on every
+    # first boot (the template's keyring is already initialised).
+    systemctl disable systemd-time-wait-sync.service pacman-init.service 2>/dev/null || true
+    rm -rf /etc/systemd/system/cloud-init.target.wants
     if [[ -e /etc/default/grub ]]; then
-        sed -i 's/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=1/' /etc/default/grub
+        sed -i -e 's/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=1/' -e 's/net\.ifnames=0 *//' /etc/default/grub
         grep -q 'console=ttyS0' /etc/default/grub || \
             sed -i 's/^GRUB_CMDLINE_LINUX_DEFAULT="/GRUB_CMDLINE_LINUX_DEFAULT="console=ttyS0,115200 console=tty1 /' /etc/default/grub
         grub-mkconfig -o /boot/grub/grub.cfg
@@ -99,7 +104,7 @@ set -eu
 name=$(cat /sys/class/dmi/id/product_serial 2>/dev/null || true)
 if printf '%s' "$name" | grep -Eqx 'wave-[a-z0-9-]{1,48}' && [ "$(cat /etc/hostname 2>/dev/null)" != "$name" ]; then
     echo "$name" > /etc/hostname
-    hostname "$name"
+    echo "$name" > /proc/sys/kernel/hostname  # no hostname(1) without inetutils
 fi
 EOF
     chmod 755 /usr/local/sbin/wave-lab-firstboot
