@@ -1,6 +1,6 @@
 # Ubuntu 24.04 GNOME (Wayland) re-test of the U2404 fixes
 
-> **In short:** status: in progress. Re-test of the fixes for B-01 to B-13 from [DISTRO-UBUNTU-2404.md](DISTRO-UBUNTU-2404.md) on disposable Ubuntu 24.04.5 GNOME Wayland guests with a live AirVPN account. New: R-01, an upgrade while connected now drops the connection on Ubuntu, because needrestart restarts the networking service after the B-01 fix replaces the helper.
+> **In short:** status: complete. Re-test of the fixes for B-01 to B-13 from [DISTRO-UBUNTU-2404.md](DISTRO-UBUNTU-2404.md) on disposable Ubuntu 24.04.5 GNOME Wayland guests with a live AirVPN account. B-02 to B-07, B-09 to B-11, B-13, D-09 and the regression pass PASS. B-01 refreshes the helper as designed but FAILS in practice: on Ubuntu, needrestart restarts the networking service right after the upgrade and the active connection drops (R-01, fix-now; the lock held, nothing leaked). B-12 is documentation only and was not re-tested in the GUI. Minor: R-02 duplicate log lines, R-03 a banner outliving Turn off Network Lock, R-04 a short lock-off DNS gap during switches.
 
 Date: 2026-11-09. Tester: re-test agent. Line numbers refer to `8d32d4a`.
 
@@ -34,7 +34,7 @@ Evidence (outside Git): `.lab/evidence/u2404-retest/` in the private lab directo
 | 9 | B-10 version/args | **PASS** | `wave-vpn --version` → `wave-vpn 0.1.3`, `wave-vpn-gui --version` → `wave-vpn-gui 0.1.3` (both exit 0). Without a display: `wave-vpn-gui: no graphical display found (WAYLAND_DISPLAY and DISPLAY are not set). Open Wave VPN from your desktop session, or use the wave-vpn command.`, exit 1, no panic. `--bogus`: `unexpected argument '--bogus'` plus usage, exit 2. Neither started a second GUI. Evidence `r9-cli.txt`. |
 | 10 | B-11 idle CPU | **PASS** | Measured over 279 s instead of 20 min (time budget): connected, idle, window visible on Overview (uptime ticking). GUI CPU 1.84 s in 279 s = **0.40 s per minute** (0.66 % of a core), against ~1.9 s per minute before; RSS 196 MB. A click on Servers rendered within 1 s. Evidence `r10-idle-cpu.txt`, `r10-responsive-servers.png`. |
 | 11 | D-09 sign-in deadline | **PASS** | Signed out (keyring item cleared), all egress except LAN dropped with nft, dummy username/password (no real credentials typed). "Signing in…" with a **Cancel** button; still signing in at 43 s; by 50 s: "Sign-in timed out after 45 seconds. Check your network and retry shortly.", username and password both kept. A second attempt cancelled after 8 s returned at once to the form with the password kept. The password field shows empty while signing in and is restored afterwards (cosmetic). Evidence `r11-*`. |
-| 12 | Regression pass | pending | |
+| 12 | Regression pass | **PASS** | Fresh rollback, password GDM login, `sudo apt install ./FIX.deb`: helper authorized for the user (`service.json` uid 1000, socket active, helper identical). GUI sign-in through the form saved one keyring item. Connect Best: Connected, "IPv4: Verified · IPv6: Verified · DNS: Verified", HTTPS over IPv4 and IPv6. Switch: new endpoint, HTTPS 200. Lock on + Disconnect: **Blocking traffic** panel with **Turn off Network Lock**; IPv4 and IPv6 HTTPS 000, DNS to a public resolver and through the stub both time out. Turn off Network Lock: table removed, `enabled:false`, HTTPS 200, DNS answers. Lock on, Connect, reboot: no Wave table, tunnel, rules or `/run/wave-vpn`, internet open, GUI shows Disconnected / Network Lock off, as PARITY.md documents (an ordinary lock does not survive reboot). Evidence `r12-*`. |
 
 ## New bugs
 
@@ -61,6 +61,10 @@ Evidence (outside Git): `.lab/evidence/u2404-retest/` in the private lab directo
 - With Network Lock off, a switch deletes the old link and creates the new one about 250 ms later; one query from an application that ran during that gap went to the LAN resolver on the physical NIC (`r3-timeline.txt`, 19:22:57.74 between link removal at .68 and creation at .94). Expected for an unlocked teardown and prevented by Network Lock; worth one sentence in USER-GUIDE (switching with the lock off is a short disconnect).
 
 ## Not run or limited
+
+- B-12 (README wording for the one-time authorization prompt) is documentation only; no polkit prompt was triggered because the package install authorizes the sudo user.
+- Step 10 measured 4.7 min of idle instead of 20 min.
+- The clone was destroyed after the run.
 
 - Real version bump: both packages are `0.1.3-1`.
 - An interactive `sudo apt install` in a pseudo-terminal could not be completed by the lab tooling (it hung after the triggers and was stopped before needrestart ran). needrestart's Ubuntu changelog documents that its APT-hook mode restarts services by default, so the non-interactive result applies to interactive installs too; not observed directly.
