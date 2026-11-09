@@ -1,6 +1,6 @@
 # Round 2 re-test: B-14 to B-22 and R-01 on Ubuntu, Debian and openSUSE
 
-> **In short:** status: in progress (Ubuntu 24.04 and Debian 13 complete). Re-test of the second batch of fixes from [DISTRO-UBUNTU-2404.md](DISTRO-UBUNTU-2404.md) (B-14 to B-22) and [DISTRO-UBUNTU-2404-RETEST.md](DISTRO-UBUNTU-2404-RETEST.md) (R-01) on disposable guests with a live AirVPN account. Ubuntu 24.04 and Debian 13: every fix PASSES, including B-22 on Debian's plain resolv.conf (re-activations, NetworkManager restart, crash + Recover). New: N-01 (an upgrade from the published 0.1.3 while connected keeps the old networking helper until reboot, because the 0.1.3 broker has no idle restart) and N-02 (once, the GNOME session ended right after installing the package on a freshly booted guest, as already seen once in the first round).
+> **In short:** status: complete. Re-test of the second batch of fixes from [DISTRO-UBUNTU-2404.md](DISTRO-UBUNTU-2404.md) (B-14 to B-22) and [DISTRO-UBUNTU-2404-RETEST.md](DISTRO-UBUNTU-2404-RETEST.md) (R-01) on disposable Ubuntu 24.04, Debian 13 and openSUSE Tumbleweed guests with a live AirVPN account. Every fix under test PASSES on every distribution where it was run. That includes B-22 on Debian's plain resolv.conf and on openSUSE's netconfig symlink (re-activations, NetworkManager restart, `netconfig update -f`, crash + Recover), and Network Lock alongside firewalld. New: **N-03 (high)**: on openSUSE KDE, Wave decides the Secret Service is unavailable although KWallet serves it, so it ignores the saved account and would store the password in plaintext. N-01: an upgrade from the published 0.1.3 while connected keeps the old helper until reboot. N-02: once, the GNOME session ended right after installing on a freshly booted guest (seen once in the first round too). N-04: with the lock on under openSUSE, re-activating the wired connection fails and recovers after about 40 s. N-05 is cosmetic.
 
 Date: 2026-11-09. Tester: round-2 test agent. Line numbers refer to `0a3697a`.
 
@@ -60,7 +60,45 @@ Template `wave-tpl-debian13`: NetworkManager writes a plain `/etc/resolv.conf`, 
 | D8 | Lock on, Disconnect | **PASS** | DNS fails, IPv4/IPv6 HTTPS 000, nothing leaves the NIC. Evidence `d-lockon-disconnected.txt`. |
 | D9 | B-14 quick check | **PASS** | `nft flush ruleset`: table back after 4 s while connected (HTTPS 200), after 1 s while disconnected with the lock on. Evidence `d-b14.txt`. |
 
+## openSUSE Tumbleweed KDE Plasma (Wayland)
+
+Template `wave-tpl-opensuse-tw`: firewalld active (`public`), KWallet (`ksecretd --pam-login`) unlocked by a password SDDM login, dbus-broker. The template's NetworkManager writes a plain `/etc/resolv.conf` (as on Debian) and `sysconfig-netconfig` is not installed. For the layout this round asked for, `sysconfig-netconfig` was installed, NetworkManager set to `rc-manager=netconfig`, and `/etc/resolv.conf` made a symlink to `/run/netconfig/resolv.conf` (`netconfig update -f`, DNS working) before Wave connected. FIX `.rpm` installed with zypper after boot finished.
+
+| # | Step | Result | Notes |
+| --- | --- | --- | --- |
+| O1 | Install, sign-in (KWallet) | **FAIL → N-03** | Account stored in KWallet through `secret-tool` (search finds it), but the GUI showed Settings "Not configured", "Secure storage is unavailable. Signing in will save your password in plaintext on this computer.", and Connect said "Sign in to AirVPN to connect". To continue, the account was provided through Wave's own plaintext fallback file (mode 0600, written over stdin on the disposable guest). Evidence `o-connect-1.png`, `o-n03-secret-service.txt`. |
+| O2 | Connect (lock off) | **PASS** | Connected; IPv4/IPv6 HTTPS 200; the symlink was replaced by Wave's file, and the backup is the symlink itself (`resolv.conf.wave-vpn-backup -> /run/netconfig/resolv.conf`); drop-in present. |
+| O3 | B-22: `nmcli con up` ×3, `netconfig update -f` | **PASS** | resolv.conf stayed Wave's file after each re-activation and after `netconfig update -f`; DNS OK; 0 port-53 packets on the NIC. Evidence `o-b22-session.txt`. |
+| O4 | B-22: Disconnect | **PASS** | Symlink to `/run/netconfig/resolv.conf` restored, drop-in and backup gone; `netconfig update -f` and `nmcli con up` keep working, DNS via the LAN resolver. Evidence `o-b22-disconnect.txt`. |
+| O5 | B-22: crash + foreign file + Recover | **PASS** | `kill -9` of the root worker and the broker, foreign resolv.conf: **Cleanup needed**. Recover: link, recovery record, backup and drop-in gone, foreign file kept (by design); `netconfig update -f` then restores the symlink. Connect afterwards: connected, DNS OK. Evidence `o-b22-crash.txt`, `o-b22-cleanup-needed.png`. |
+| O6 | firewalld: lock on while disconnected, `firewall-cmd --reload` | **PASS** | `inet firewalld` and `inet wave_vpn` side by side; HTTPS 000 before and after the reload; Wave's table untouched by the reload; firewalld `running`. Evidence `o-firewalld.txt`. |
+| O7 | firewalld: connected with the lock on, `firewall-cmd --reload` | **PASS** | Same worker, tunnel up, IPv4/IPv6 HTTPS 200 after the reload, both tables present. |
+| O8 | Leak check | **PASS** | Lock off and lock on: DNS, IPv4/IPv6 HTTPS, `dig @9.9.9.9`: nothing on the NIC except WireGuard to the endpoint (only other LAN hosts' broadcast/multicast captured). Lock on while disconnected: HTTPS 000. |
+| O9 | `nmcli con up` with the lock on | **PARTIAL → N-04** | resolv.conf, DNS and the tunnel unaffected, but each re-activation failed (rc 4). Evidence `o-nmcli-lock-on.txt`. |
+
 ## New bugs
+
+### N-03 openSUSE KDE: Secret Service reported unavailable, saved account ignored, plaintext offered — high
+
+- **Build:** FIX, openSUSE Tumbleweed Plasma, KWallet (`ksecretd --pam-login`, kwalletd6), dbus-broker. Probably also Arch KDE (same stack), not run.
+- **Repro:** password SDDM login (wallet unlocked by pam_kwallet), save the account in the Secret Service (`secret-tool store … application wave-vpn schema airvpn-account-v1`, or any earlier Wave sign-in on a stack where detection works), launch Wave.
+- **Actual:** Settings: Credentials "Not configured" and "Secure storage is unavailable. Signing in will save your password in plaintext on this computer."; Connect: "Sign in to AirVPN to connect". Signing in from the form would write `~/.config/wave-vpn/account.json` in plaintext on a desktop that has a working, unlocked wallet.
+- **Cause:** `Storage::detect` treats the keyring as present only when `StartServiceByName("org.freedesktop.secrets")` succeeds (gdbus, then dbus-send). On this stack the name is owned (`NameHasOwner` → true, `secret-tool` works) but nothing declares it D-Bus-activatable (only `org.kde.secretservicecompat.service` and kwalletd files exist), and dbus-broker answers `ServiceUnknown: The name is not activatable`, so detection falls back to `Plaintext`.
+- **Code:** `src/credentials.rs:141-178`.
+- **Suggested fix:** treat the backend as available when `NameHasOwner("org.freedesktop.secrets")` is true (check this first), and only then try activation; never offer plaintext while the name has an owner.
+- **Verify fix:** same repro shows the saved account, Settings "Signed in", and a new sign-in stores into KWallet (`secret-tool search` lists it; no `account.json`).
+- **Evidence:** `o-connect-1.png`, `o-n03-secret-service.txt`.
+
+### N-04 openSUSE, lock on: re-activating the wired connection fails and recovers after about 40 s — low, needs investigation
+
+- **Repro:** openSUSE (firewalld active, the netconfig layout above), lock on, connected. `nmcli -w 40 con up "Wired connection 1"`.
+- **Actual:** `Error: Connection activation failed: operation succeeded but object …/ActiveConnection/N does not exist`; the device stays in `deactivating` (state 110) for 20–40 s, then returns to `connected` with its lease. Tunnel, resolv.conf and DNS are unaffected. With the lock off on the same guest, and with the lock on on Ubuntu and Debian, the same command succeeded every time.
+- **Suspect:** a NetworkManager dispatcher pre-down/down script (`20-chrony-onoffline`, `nfs`) that blocks under Network Lock, or DHCP release/renew traffic the lock drops; not isolated. Firewall rules: `src/firewall.rs`.
+- **Evidence:** `o-nmcli-lock-on.txt`, `o-firewalld.txt`.
+
+### N-05 GUI panics when WAYLAND_DISPLAY names a socket that does not exist — cosmetic
+
+- Seen by accident: with `WAYLAND_DISPLAY=wayland-0` on a Plasma session whose socket is `wayland-1`, `wave-vpn-gui` panics: `Create event loop: Os(… WaylandError(Connection(NoCompositor)))`, instead of B-10's friendly "no graphical display found" (which covers only unset variables). Users rarely hit this (stale variables in a terminal multiplexer or after a session restart). `src/gui.rs:2279`.
 
 ### N-01 Upgrade from the published 0.1.3 while connected keeps the old helper running until reboot — minor
 
@@ -85,3 +123,12 @@ Template `wave-tpl-debian13`: NetworkManager writes a plain `/etc/resolv.conf`, 
 
 - Real version bump: both packages are `0.1.3-1`.
 - U12 cannot tell whether Recover or the GUI's own re-apply restored the table; the outcome (lock kept) is what the step checks.
+- openSUSE: the template's default plain resolv.conf was not re-run separately (same NetworkManager plain-file path as Debian, D2–D6); the netconfig symlink layout was set up by hand as described above. B-14 to B-21 GUI fixes other than B-14/B-22 were checked on Ubuntu only.
+- Sign-in on openSUSE used the plaintext fallback file because of N-03; no credentials were typed into the GUI or captured on screenshots on any distribution.
+- Lab tooling: `labctl run --session` exports `WAYLAND_DISPLAY=wayland-0`, but Plasma on openSUSE uses `wayland-1`; the GUI was started with the correct value (this triggered N-05).
+- All clones were destroyed after their distribution.
+
+## Summary
+
+- Steps: 36. PASS 34, PARTIAL 1 (O9 → N-04), FAIL 1 (O1 → N-03).
+- New bugs: N-03 high; N-01 minor; N-02 needs investigation; N-04 low; N-05 cosmetic.
