@@ -6,7 +6,7 @@ use wave_protocol::*;
 use zeroize::Zeroize;
 
 #[derive(Parser)]
-#[command(about = "Wave VPN — unofficial GPLv3 AirVPN client")]
+#[command(version, about = "Wave VPN — unofficial GPLv3 AirVPN client")]
 struct Args {
     #[command(subcommand)]
     command: Action,

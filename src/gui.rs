@@ -2095,7 +2095,44 @@ fn window_settings() -> iced::window::Settings {
         ..Default::default()
     }
 }
+const USAGE: &str = "Usage: wave-vpn-gui [--version | --help]\nOpens the Wave VPN window. The wave-vpn command is the command-line interface.";
 fn main() -> iced::Result {
+    let args: Vec<String> = std::env::args_os()
+        .skip(1)
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    match args
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .as_slice()
+    {
+        [] => (),
+        ["--version" | "-V"] => {
+            println!("wave-vpn-gui {}", env!("CARGO_PKG_VERSION"));
+            return Ok(());
+        }
+        ["--help" | "-h"] => {
+            println!("{USAGE}");
+            return Ok(());
+        }
+        [first, ..] => {
+            eprintln!("wave-vpn-gui: unexpected argument '{first}'\n{USAGE}");
+            std::process::exit(2);
+        }
+    }
+    // winit panics without a display; say what is wrong instead.
+    #[cfg(target_os = "linux")]
+    if ["WAYLAND_DISPLAY", "WAYLAND_SOCKET", "DISPLAY"]
+        .iter()
+        .all(|name| std::env::var_os(name).is_none_or(|value| value.is_empty()))
+    {
+        eprintln!(
+            "wave-vpn-gui: no graphical display found (WAYLAND_DISPLAY and DISPLAY are not set). \
+             Open Wave VPN from your desktop session, or use the wave-vpn command."
+        );
+        std::process::exit(1);
+    }
     iced::daemon(Wave::boot, Wave::update, Wave::view)
         .title(|_app: &Wave, _id| {
             if std::env::var_os("WAVE_PREVIEW").is_some() {
