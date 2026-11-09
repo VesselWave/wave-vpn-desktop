@@ -4,6 +4,7 @@ use crate::{
     bootstrap::Exemption,
     firewall,
     options::Options,
+    resolver,
     transport::{parse_stats, LockInput, PersistentLock as LockConfig, Request, Stats},
     TunnelProfile,
 };
@@ -43,6 +44,8 @@ struct Recovery {
     families: Vec<String>,
     resolver_swapped: bool,
     resolver_content: Option<String>,
+    /// The NetworkManager runtime drop-in (`resolver::NM_DROP_IN`) is ours.
+    nm_dns_override: bool,
 }
 fn root() -> Result<()> {
     ensure!(
@@ -508,23 +511,17 @@ fn configure(r: &Request, touched: &mut bool) -> Result<()> {
         )?;
     } else {
         trusted(Path::new("/etc"))?;
-        let backup = "/etc/resolv.conf.wave-vpn-backup";
         ensure!(
-            std::fs::symlink_metadata(backup).is_err(),
+            std::fs::symlink_metadata(resolver::BACKUP).is_err(),
             "Resolver backup already exists; use Recover first"
         );
-        let text = p
-            .dns
-            .iter()
-            .map(|ip| format!("nameserver {ip}\n"))
-            .collect::<String>();
+        hold_networkmanager(&mut s)?;
+        let text = resolver::tunnel_resolv_conf(&p.dns);
         s.resolver_swapped = true;
         s.resolver_content = Some(text.clone());
         save_recovery(&s)?;
-        std::fs::rename("/etc/resolv.conf", backup)?;
-        atomic("/etc/resolv.conf", text.as_bytes())?;
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions("/etc/resolv.conf", std::fs::Permissions::from_mode(0o644))?;
+        std::fs::rename("/etc/resolv.conf", resolver::BACKUP)?;
+        write_resolver(&text)?;
     }
     for route in o
         .get("routes")
@@ -564,6 +561,116 @@ fn configure(r: &Request, touched: &mut bool) -> Result<()> {
     }
     cache_services(o)?;
     Ok(())
+}
+/// Plain resolv.conf backend: tell NetworkManager, if installed, to leave
+/// /etc/resolv.conf alone for this session through a runtime drop-in (also
+/// honoured when NetworkManager restarts). Recorded before it is written, so
+/// Recover removes it after a crash; /run does not survive a reboot. A failed
+/// reload only warns: the monitor re-checks the file every second anyway.
+fn hold_networkmanager(s: &mut Recovery) -> Result<()> {
+    if tool("NetworkManager").is_err() {
+        return Ok(());
+    }
+    s.nm_dns_override = true;
+    save_recovery(s)?;
+    let dir = Path::new(resolver::NM_DROP_IN)
+        .parent()
+        .context("Missing parent")?;
+    std::fs::create_dir_all(dir)?;
+    write_public(Path::new(resolver::NM_DROP_IN), resolver::NM_DROP_IN_TEXT)?;
+    if let Err(e) = reload_networkmanager() {
+        eprintln!("Warning: NetworkManager did not reload ({e}); Wave keeps /etc/resolv.conf on the tunnel DNS by checking it every second");
+    }
+    Ok(())
+}
+/// Undo `hold_networkmanager`, after resolv.conf was restored: NetworkManager
+/// then writes the file for the current network again. Also removes a
+/// drop-in left without a record. A failed reload is not a cleanup failure.
+fn release_networkmanager(errors: &mut Vec<String>) {
+    match std::fs::remove_file(resolver::NM_DROP_IN) {
+        Ok(()) => {
+            if let Err(e) = reload_networkmanager() {
+                eprintln!("Warning: NetworkManager did not reload ({e}); it manages /etc/resolv.conf again after its next restart");
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+        Err(e) => errors.push(format!("{}: {e}", resolver::NM_DROP_IN)),
+    }
+}
+fn reload_networkmanager() -> Result<()> {
+    if run(
+        "systemctl",
+        &["is-active", "--quiet", "NetworkManager"],
+        None,
+    )
+    .is_err()
+    {
+        // Not running: it reads the drop-in directory when it starts.
+        return Ok(());
+    }
+    // A full reload re-reads conf.d and re-applies the DNS mode (NetworkManager
+    // 1.22+); older versions reload through their unit.
+    run("nmcli", &["general", "reload"], None)
+        .or_else(|_| run("systemctl", &["reload", "NetworkManager"], None))
+        .map(|_| ())
+}
+/// Replace a world-readable file atomically, readable from the first moment.
+fn write_public(path: &Path, text: &str) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let mut f = tempfile::NamedTempFile::new_in(path.parent().context("Missing parent")?)?;
+    f.as_file()
+        .set_permissions(std::fs::Permissions::from_mode(0o644))?;
+    f.write_all(text.as_bytes())?;
+    f.as_file().sync_all()?;
+    f.persist(path)?;
+    Ok(())
+}
+fn write_resolver(text: &str) -> Result<()> {
+    write_public(Path::new("/etc/resolv.conf"), text)
+}
+fn current_resolver() -> resolver::Current {
+    match std::fs::symlink_metadata("/etc/resolv.conf") {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => resolver::Current::Missing,
+        Ok(m) if m.is_file() => std::fs::read_to_string("/etc/resolv.conf")
+            .map(resolver::Current::File)
+            .unwrap_or(resolver::Current::Other),
+        _ => resolver::Current::Other,
+    }
+}
+/// Monitor tick, plain resolv.conf backend: a resolver manager, DHCP client
+/// or user replaced the tunnel resolver (NetworkManager does so seconds after
+/// any reactivation unless held). Write it again so DNS stays on the tunnel,
+/// also under Network Lock, where the foreign resolver would be blocked.
+/// Unable to: the session ends rather than leak DNS while showing Verified.
+fn reassert_resolver(expected: &str, reasserts: &mut resolver::Reasserts) -> Result<()> {
+    if !resolver::needs_reassert(&current_resolver(), expected) {
+        return Ok(());
+    }
+    write_resolver(expected).context("Unable to keep the tunnel DNS in /etc/resolv.conf")?;
+    if reasserts.warn(Instant::now()) {
+        eprintln!(
+            "Warning: /etc/resolv.conf was replaced by another program (for example NetworkManager); Wave restored the tunnel DNS ({} time(s) this session)",
+            reasserts.count
+        );
+    }
+    Ok(())
+}
+/// Put the original resolv.conf back, or keep a newer file another program
+/// wrote after Wave's (see `resolver::restore`). Never blocks Recover.
+fn restore_resolver(recorded: Option<&str>, errors: &mut Vec<String>) {
+    let backup = std::fs::symlink_metadata(resolver::BACKUP).is_ok();
+    match resolver::restore(backup, &current_resolver(), recorded) {
+        resolver::Restore::Nothing => (),
+        resolver::Restore::Original => {
+            if let Err(e) = std::fs::rename(resolver::BACKUP, "/etc/resolv.conf") {
+                errors.push(e.to_string());
+            }
+        }
+        resolver::Restore::KeepCurrent => match std::fs::remove_file(resolver::BACKUP) {
+            Ok(()) => eprintln!("Kept the /etc/resolv.conf another program wrote after Wave's and removed Wave's older backup"),
+            Err(e) => errors.push(e.to_string()),
+        },
+    }
 }
 /// Keep NetworkManager away from the tunnel link, before it has addresses or
 /// is up. Otherwise NetworkManager adopts it as an external connection and,
@@ -607,26 +714,10 @@ fn cleanup(o: &Options, retain: bool, bootstrap: &[Exemption]) -> Result<()> {
                 errors.push(e.to_string());
             }
         }
-        if s.resolver_swapped
-            && std::fs::symlink_metadata("/etc/resolv.conf.wave-vpn-backup").is_ok()
-        {
-            let unchanged = std::fs::symlink_metadata("/etc/resolv.conf")
-                .map(|m| m.is_file())
-                .unwrap_or(false)
-                && std::fs::read_to_string("/etc/resolv.conf").ok() == s.resolver_content;
+        if s.resolver_swapped {
             // A crash between rename and replacement leaves no current file;
-            // restoring the original is safe in that specific state.
-            let missing = std::fs::symlink_metadata("/etc/resolv.conf")
-                .is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound);
-            if unchanged || missing {
-                if let Err(e) =
-                    std::fs::rename("/etc/resolv.conf.wave-vpn-backup", "/etc/resolv.conf")
-                {
-                    errors.push(e.to_string());
-                }
-            } else {
-                errors.push("Resolver changed outside Wave; original backup retained for manual conflict resolution".into());
-            }
+            // restoring the original is safe in that state too.
+            restore_resolver(s.resolver_content.as_deref(), &mut errors);
         }
         if let Some(mark) = s.src_mark {
             if let Err(e) = std::fs::write("/proc/sys/net/ipv4/conf/all/src_valid_mark", mark) {
@@ -691,6 +782,9 @@ fn cleanup(o: &Options, retain: bool, bootstrap: &[Exemption]) -> Result<()> {
             );
         }
     }
+    // An orphaned backup (no record) is resolved by Wave's marker line.
+    restore_resolver(None, &mut errors);
+    release_networkmanager(&mut errors);
     if Path::new(CONFIG).is_file() && run("ip", &["link", "show", "dev", IFACE], None).is_ok() {
         if let Err(e) = run("ip", &["link", "delete", "dev", IFACE], None) {
             errors.push(e.to_string());
@@ -881,6 +975,11 @@ fn monitor(r: &mut Request, stop: &AtomicBool, changes: &mpsc::Receiver<bool>) -
     let mut schedule = crate::checks::Schedule::default();
     let mut last_wall = std::time::SystemTime::now();
     let mut last_tick = Instant::now();
+    let resolver_file = read_private(&format!("{DIR}/recovery.json"))?
+        .and_then(|b| serde_json::from_slice::<Recovery>(&b).ok())
+        .is_some_and(|s| s.resolver_swapped);
+    let expected_resolver = resolver::tunnel_resolv_conf(&r.profile.dns);
+    let mut reasserts = resolver::Reasserts::default();
     // Generate traffic even when keepalive is disabled, to initiate the handshake.
     for dns in &r.profile.dns {
         if let Ok(ip) = dns.parse::<std::net::IpAddr>() {
@@ -893,6 +992,10 @@ fn monitor(r: &mut Request, stop: &AtomicBool, changes: &mpsc::Receiver<bool>) -
     loop {
         if stop.load(Ordering::Relaxed) {
             return Ok(());
+        }
+        // Before verification too, so it always tests the tunnel resolver.
+        if resolver_file {
+            reassert_resolver(&expected_resolver, &mut reasserts)?;
         }
         for enabled in changes.try_iter() {
             r.options.set("netlock", enabled.to_string());
@@ -1066,7 +1169,10 @@ pub fn worker() -> Result<()> {
     }
     // The global operation lock proves there is no live worker. Repair only
     // our journaled resources before a new attempt, keeping confirmed protection.
-    if read_private(&format!("{DIR}/recovery.json"))?.is_some() {
+    if read_private(&format!("{DIR}/recovery.json"))?.is_some()
+        || std::fs::symlink_metadata(resolver::BACKUP).is_ok()
+        || Path::new(resolver::NM_DROP_IN).exists()
+    {
         cleanup(
             &r.options,
             actual_protection()? || persistent()?,

@@ -22,6 +22,13 @@ New Kotlin and Rust implementations were written against these official sources:
   manifest and WireGuard field mapping), `resources/providers/AirVPN.json`,
   `src/Lib.Core/IpAddresses.cs` (`Add`: an invalid server address is skipped
   instead of failing the server list; Wave does not resolve such entries).
+  `src/App.CLI.Linux.Elevated/src/impl.cpp` ("dns-switch-do",
+  "dns-switch-restore") and `src/Lib.Platform.Linux/Platform.cs`
+  (`DnsSwitchCheck`, re-run from `OnCheckUpMonitor`): the plain resolv.conf
+  backend writes the VPN resolver again whenever another program replaced it.
+  Wave's `src/resolver.rs` follows that behavior; holding NetworkManager off
+  with a runtime drop-in and keeping a newer foreign file on Recover are
+  Wave's own additions. No source text copied.
 - [AirVPN/EddieAndroid](https://gitlab.com/AirVPN/EddieAndroid), commit
   `1376541c05f6d8b2ca8b07ffb790b2c95615cf9c`:
   `SupportTools.java` (document version 295, request envelope, bandwidth units),

@@ -59,6 +59,10 @@ REQUIRED = (
     'forum_u2404_b10_cli_and_gui_report_their_version',
     'forum_u2404_b10_gui_rejects_unknown_arguments',
     'forum_u2404_b11_background_events_wake_the_ui_without_fast_polling',
+    'forum_u2404_b22_foreign_resolv_conf_is_reasserted',
+    'forum_u2404_b22_recover_keeps_a_resolver_changed_outside_wave',
+    'forum_u2404_b22_networkmanager_leaves_resolv_conf_alone_during_a_session',
+    'forum_u2404_b22_repeated_rewrites_warn_once_per_minute',
 )
 RESULT = re.compile(r'^test (\S+) \.\.\. (ok|FAILED|ignored)\b')
 STATUS = {'ok': 'passed', 'FAILED': 'failed', 'ignored': 'skipped'}

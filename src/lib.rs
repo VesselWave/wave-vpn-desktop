@@ -14,6 +14,7 @@ pub mod lifecycle;
 pub mod options;
 pub mod process;
 pub mod protection;
+pub mod resolver;
 pub mod schedule;
 pub mod service;
 pub mod transport;
