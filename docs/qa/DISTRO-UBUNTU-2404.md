@@ -1,6 +1,6 @@
 # Ubuntu 24.04 GNOME (Wayland) distribution test
 
-> **In short:** status: in progress. Main-distro round on disposable Ubuntu 24.04.5 GNOME Wayland x86_64 guests with a live AirVPN account. No blocker found so far: the lock held through every crash, switch, outage, upgrade and uninstall we tried, D-01 did not reproduce in 12 GUI switches, and the parity fixes D-03 to D-06 behave as specified. Confirmed defects: D-08 (a package upgrade while connected leaves an old helper that nothing ever refreshes or flags), a GNOME "Connection failed" system notification on every Disconnect/switch/retry, one public-name DNS query (NetworkManager connectivity check) on the physical link at each tunnel start, and a set of status/copy issues.
+> **In short:** status: in progress. Main-distro round on disposable Ubuntu 24.04.5 GNOME Wayland x86_64 guests with a live AirVPN account. The lock held through every crash, switch, outage, upgrade and uninstall tried, D-01 did not reproduce in 12 GUI switches, and D-03 to D-06 and D-19 behave as specified. Main defects: a ruleset flush silently drops Network Lock with the GUI quietly switching to "off" (D-13, B-14), two GUI instances fight over one tunnel (D-20, B-19), an upgrade while connected leaves a stale helper forever (D-08, B-01), Docker DNS and the NetworkManager connectivity check use the LAN resolver while connected (B-16, B-03), and a GNOME "Connection failed" notification on every Disconnect/switch/retry (B-02).
 
 Date: 2026-11-08/09. Tester: main-distro test agent. Intake: [DESKTOP-BUG-INTAKE.md](DESKTOP-BUG-INTAKE.md) (D-ids). Line numbers refer to `b2ca704` unless stated.
 
@@ -76,6 +76,19 @@ Legend: PASS, FAIL (bug filed), PARTIAL, BLOCKED, NOT RUN. Build is LAB unless s
 | C7 | D-01: ≥10 server switches with DNS checks, lock on | PASS (12/12) | Every switch: new endpoint, handshake, resolver query (random name → NXDOMAIN from the tunnel resolver), `getent`, direct `dig @tunnel-DNS`, HTTPS 200. Only WireGuard UDP on the NIC. D-01 not reproduced on x86_64. |
 | C8 | D-16 IPv6, IPv4-only device | PASS | IPv6 internet through the tunnel verified; with the lock on and no tunnel, `ping -6` to a public address fails. Dual-stack LAN not available. |
 
+### D. Environment coexistence
+
+| # | Scenario | Result | Notes |
+| --- | --- | --- | --- |
+| D1 | D-13 `nft flush ruleset` while locked and **disconnected** | **FAIL → B-14** | Internet open immediately (HTTPS 200). Within 15 s the GUI shows **Disconnected** / "Network lock off", the Settings toggle flips to off, no warning or log line. The saved preference stays `netlock: true`, so the next Connect re-applies the lock; until then the machine is unprotected without being told. |
+| D2 | D-13 `nft flush ruleset` while locked and **connected** | PARTIAL → B-14 | Tunnel and policy rules survive, so traffic still goes through the tunnel, but the lock is gone: GUI shows "Network lock off" with no warning; the lock comes back only on Disconnect (re-applied as retained lock) or the next Connect. |
+| D3 | D-13 ufw `default deny outgoing` + allow 53, then Connect | FAIL → B-15 | Never connects: "First WireGuard handshake timed out", endless Reconnecting… with the generic banner (B-04) and a GNOME notification per attempt (B-02). Nothing mentions a firewall. |
+| D4 | D-13 Docker (`docker.io`), lock off, connected | PARTIAL → B-16 | Container HTTPS exits through the VPN (provider ISP shown). Container DNS goes to the **LAN resolver on the physical NIC** (Docker copies the upstream list from resolved, which includes the LAN DNS); public names visible to the LAN/ISP resolver. |
+| D5 | D-13 Docker, lock on (connected and disconnected) | PASS (document) → B-17 | Containers have **no** network at all while locked, even while connected: the `forward` chain is `policy drop` with no tunnel exception. Expected per the intake for disconnected; while connected it surprises users who toggled the lock on. |
+| D6 | D-14 wg-quick interface using table 51820 | PASS (wording) | Connect refused once with "Routing table 51820 is already in use" in Logs, no retry loop; Overview banner is the generic B-04 text, and the message names neither wg-quick nor a fix. |
+| D7 | D-14 Tailscale | NOT RUN | Skipped by design: no tailnet login, and a non-logged-in install adds no routes. |
+| D8 | D-12 plain resolv.conf, NetworkManager dnsmasq, libvirt | see "still to run" | |
+
 ### E. Lifecycle (lock on, connected, capture running)
 
 | # | Scenario | Result | Notes |
@@ -87,6 +100,13 @@ Legend: PASS, FAIL (bug filed), PARTIAL, BLOCKED, NOT RUN. Build is LAB unless s
 | E5 | Connection re-activation (DHCP renew stand-in) | PASS | |
 | E6 | netem 30 % loss + 500 ms delay, 40 s | PASS | HTTPS slow/timed out while impaired, normal after removal; no reconnect storm. |
 | E7 | Tunnel UDP blocked 210 s, then unblocked | PASS | Reconnecting while blocked, handshake 25 s after unblock. |
+| E8 | 9.5 h connected idle (overnight) | PASS | Still connected, no unexpected reconnects, server list refreshed every ~30 min, no panics; GUI RSS 187 → 204 MB. |
+| E9 | Reboot while connected with lock on | PASS (as documented) | After reboot: no Wave table, no tunnel, no rules, internet open; `network-status` `enabled:false`. PARITY.md: an ordinary lock does not survive reboot. The GUI then shows "Network lock off" while the saved preference still says on (re-applied at next Connect). |
+| E10 | Autologin reboot, keyring locked (D-18b) | PARTIAL → B-18 | GNOME asks to unlock "Default keyring" when Wave starts. Cancel → Overview shows plain Disconnected with **no** message; Connect then says "Sign in to AirVPN to connect" and Settings shows "Not configured", as if the account were gone. Unlock → account restored. |
+| E11 | Cancel during "Connecting…" | PASS | Server UDP blocked so connect hangs; power button cancels, worker gone, lock retained. The Connecting screen shows a contradictory "Disconnected" line and the full Blocking-traffic warning under "Connecting…" (cosmetic). |
+| E12 | D-19 no StatusNotifier host (extension disabled) | PASS | Close quits the app both disconnected and connected (tunnel removed, lock kept); no hidden process, also when closed within 2 s of launch. |
+| E13 | Close-to-tray with tray host | PASS | Window hides, GUI CPU 0 s/min hidden; tray **Connect** works while hidden, tray **Servers** restores the window on Servers. |
+| E14 | D-20 second GUI instance | **FAIL → B-19** | A second launch starts a second process, window and tray icon. Connecting from one makes the other show a raw error ("Error: Networking action failed; inspect Logs: Error: Another networking operation is running; ; Caused by:; Resource temporarily unavailable (os error 11)") plus **Blocking traffic** while the tunnel is up. Quitting the owner removes the tunnel; the other keeps going. |
 
 ### F. Other
 
@@ -94,10 +114,15 @@ Legend: PASS, FAIL (bug filed), PARTIAL, BLOCKED, NOT RUN. Build is LAB unless s
 | --- | --- | --- | --- |
 | F1 | 20 min connected idle, window visible | PARTIAL → B-11 | GUI RSS flat (187 MB), 36 fds, 23 threads; helper/worker flat. GUI CPU ≈ 1.9 s per minute (≈3 % of a core) with software rendering. No journal spam (16 lines mentioning Wave over the session), no panics. |
 | F2 | `wave-vpn-gui` without a display | FAIL (minor) → B-10 | Panics in `iced_winit` ("neither WAYLAND_DISPLAY nor … DISPLAY is set") instead of a clean error; also ignores unknown arguments such as `--version`. |
+| F3 | Appearance "system" on Ubuntu's default (light) style | **FAIL → B-20** | GNOME `color-scheme` = `default` (what Settings → Appearance → Light writes) renders Wave **dark**. `prefer-light`/`prefer-dark` switch live and correctly. Light theme itself looks right. |
+| F4 | 200 % scale (1920x1200 @2x, 960x600 logical) | PASS | Crisp, all controls reachable; window taller than the screen, content scrolls. |
+| F5 | Servers: search, Favorites, Countries, country target | PASS (copy → B-21) | Search by country works; empty Favorites shows a blank table (documented D-07); starring works; country target connects. "1 servers", one country shown as its code ("CZ"), list sorted by code not by displayed name. |
+| F6 | Support report | PASS | Preview and save (mode 0600) work; version, dependencies and protection state included, no account data. |
+| F7 | Sign out | PASS | Keyring item removed (`secret-tool search` → 0), no plaintext file, Settings shows the sign-in form. |
 
 ### Still to run in this round
 
-D-12, NetworkManager dnsmasq, D-13 (flush, ufw, Docker, libvirt), D-14, suspend/resume, reboot with lock on, logout/login while connected, keyring across logout/reboot and sign-out, D-18 b/c, D-19, D-20, D-07, Servers search/favorites/countries, cancel during connecting, Settings/theme, close-to-tray CPU, 200 % scaling, D-09 on E194.
+D-12, NetworkManager dnsmasq, libvirt, suspend/resume, logout/login while connected, D-18c, D-07, D-09 on E194.
 
 ## Bugs
 
@@ -186,6 +211,63 @@ D-12, NetworkManager dnsmasq, D-13 (flush, ufw, Docker, libvirt), D-14, suspend/
 ### B-13 Preferences outlive purge, so reinstall re-enables the lock — doc
 
 - Uninstall says it "turned off Network Lock", but `~/.config/wave-vpn/preferences.json` keeps `netlock: true`, so the first Connect after reinstall turns the lock back on and Disconnect then blocks traffic. Consistent with "your choice carries over", but worth one sentence in USER-GUIDE "Upgrading and uninstalling".
+
+### B-14 Network Lock silently lost after a ruleset flush (D-13) — fix-now (the intake's blocker criterion: "silent lock loss with no warning")
+
+- **Repro:** lock on, disconnected (or connected). `sudo nft flush ruleset` (what `nftables.service` restart, some firewall managers and Docker reinstalls do).
+- **Expected:** within 15 s the GUI warns that Network Lock was removed by something else (and, ideally, re-applies it because the user's preference is on).
+- **Actual:** internet opens at once. The GUI quietly changes to **Disconnected** / "Network lock off"; the Settings toggle shows off; no log line, banner or notification. `preferences.json` keeps `netlock: true`, so the next Connect re-applies the lock, and a Disconnect while connected re-applies it as a retained lock. Until then the user believes they chose "off".
+- **Evidence:** `b31-d13-after-flush-15s.png`, `b32-…45s.png`, `b33-d13-logs.png` (no entry), `b34-d13-settings.png`, `b36-d13-flush-connected-20s.png`.
+- **Code:** the periodic status poll adopts the real state without comparing it to the preference: `Event::NetworkStatus` sets `self.guarded = enabled` (`src/gui.rs:521-524`); nothing re-asserts the table (`src/firewall.rs`).
+- **Verify fix:** same repro; within 15 s a warning appears (and/or the table is back), Logs records it, and the toggle state matches what the user chose.
+
+### B-15 ufw deny-outgoing: endless retries with no hint about the firewall (D-13) — minor
+
+- **Repro:** `sudo ufw default deny outgoing; sudo ufw allow out 53; sudo ufw enable`, Connect.
+- **Actual:** "First WireGuard handshake timed out", retries forever (3 s → 120 s backoff) with the generic banner; GNOME "Connection failed" each attempt.
+- **Expected (intake):** a clear failure, not a hang. Suggest: after N handshake timeouts with no received bytes, say "No reply from the server: a firewall may block outgoing UDP port N".
+- **Code:** retry policy `Event::End` (`src/gui.rs:776-806`), message B-04.
+
+### B-16 Docker containers resolve DNS via the LAN resolver while connected (lock off) — fix-now by the D-02 rule
+
+- **Repro:** `apt install docker.io`, Connect with lock off, `tcpdump -ni <NIC> port 53`, `docker run --rm alpine nslookup example.org`.
+- **Actual:** container queries leave on the physical NIC to the LAN resolver; HTTP from the container goes through the tunnel. Docker writes the container's `/etc/resolv.conf` from resolved's upstream list (`/run/systemd/resolve/resolv.conf`), which contains both the tunnel DNS and the LAN DNS; the LAN DNS is reachable through the main-table LAN route (`suppress_prefixlength 0`).
+- **Evidence:** capture summary in the session (A/AAAA for the test names to the LAN resolver), container resolv.conf listing both servers.
+- **Code:** DNS set only on `wavevpn0` (`src/platform/linux.rs:491-496`); the physical link keeps its DNS servers in resolved's upstream list. Eddie sets the VPN DNS on every link, which would fix this too (see D-02).
+- **Verify fix:** same capture shows no port-53 packets on the NIC, or document as a known limitation for container users.
+
+### B-17 Network Lock blocks all container/VM forwarding even while connected — doc
+
+- With the lock on, the `forward` chain is `policy drop` with no tunnel exception, so Docker containers and libvirt/NAT guests have no network even while Wave is connected (`src/firewall.rs:140-143`). State it in USER-GUIDE (Network Lock) and SUPPORT, or allow forwarded traffic out of `wavevpn0` while connected.
+
+### B-18 Locked keyring after autologin: Cancel looks like the account was deleted (D-18) — minor
+
+- **Repro:** autologin session, account saved in a password-protected keyring, reboot, open Wave, press Cancel in GNOME's unlock dialog.
+- **Actual:** Overview shows Disconnected with no note; Connect says "Sign in to AirVPN to connect"; Settings shows "Not configured". The documented message ("Unable to restore your saved account. Unlock your keyring and try again.", `src/gui.rs:373`) did not appear here, and there is no retry button.
+- **Expected:** a visible note on Overview/Settings that the saved account is locked, with a retry action.
+- **Evidence:** `36-keyring-locked-cancel.png`, `37-keyring-locked-connect.png`.
+- **Code:** `credentials::call` maps a dismissed prompt from `secret-tool lookup` (exit status 1) to "no saved account" (`src/credentials.rs:34-37`, `matches!(action, "lookup" | "clear") && code == Some(1)`), so `load` returns `Ok(None)`.
+- **Verify fix:** same repro shows the locked-keyring note and a retry that brings up the unlock prompt again.
+
+### B-19 Two GUI instances run independent controllers (D-20) — fix-now
+
+- **Repro:** Wave running (window or tray), launch it again (app grid or `wave-vpn-gui`).
+- **Actual:** second process, second window, second tray icon. Connecting in one shows the other a raw multi-line error with "os error 11" and **Blocking traffic** while the tunnel is up; quitting the instance that owns the worker tears the tunnel down under the other.
+- **Expected:** the second launch focuses the existing window and exits.
+- **Code:** no single-instance guard in `src/gui.rs` (`main`/`run`); raw error from `src/service.rs:464` plus the helper's lock error.
+- **Evidence:** `39-d20-second-instance.png`, `41-d20-back.png`, `42-d20-after-owner-exit.png`.
+- **Verify fix:** second launch leaves one `wave-vpn-gui` process and raises its window, including when hidden in the tray.
+
+### B-20 "Follow the desktop" shows dark on Ubuntu's default light style — minor
+
+- **Repro:** GNOME Settings → Appearance → Light (sets `org.gnome.desktop.interface color-scheme` to `default`); Wave Appearance = system.
+- **Actual:** Wave dark. The portal reports `color-scheme` 0 ("no preference"); iced gives `Mode::None`, which the GUI ignores, keeping its startup default `system_dark: true`.
+- **Code:** `src/gui.rs:335` (`system_dark: true`), `:1193-1197`.
+- **Verify fix:** with `default`, Wave renders light (treat "no preference" as light, as GTK/libadwaita do).
+
+### B-21 Server list copy — minor
+
+- Countries view: "1 servers"; one country rendered by its code ("CZ") instead of its name; list ordered by country code so names appear out of order (Canada, Switzerland, CZ…). Favorites empty state shows a blank table (D-07, documented).
 
 ## Not run or limited
 
