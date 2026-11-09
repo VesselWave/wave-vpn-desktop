@@ -38,6 +38,40 @@ fn call(action: &str, input: Option<&[u8]>) -> Result<Zeroizing<Vec<u8>>> {
     );
     Ok(Zeroizing::new(result.stdout))
 }
+/// U2404 B-18: `secret-tool lookup` exits 1 both without a saved item and
+/// when the unlock prompt of a locked keyring was dismissed (autologin).
+/// `secret-tool search` without `--unlock` still lists a locked item, so
+/// the two cases are told apart without another prompt.
+pub const KEYRING_LOCKED: &str =
+    "Your saved account is in a locked keyring. Unlock it, then choose Retry.";
+/// Whether `secret-tool search` output lists an item ("[/org/freedesktop/…]").
+pub fn search_lists_item(stdout: &[u8]) -> bool {
+    String::from_utf8_lossy(stdout)
+        .lines()
+        .any(|line| line.starts_with("[/"))
+}
+#[cfg(target_os = "linux")]
+fn saved_item_listed() -> bool {
+    use std::{process::Command, time::Duration};
+    let mut cmd = Command::new("/usr/bin/secret-tool");
+    cmd.args([
+        "search",
+        "application",
+        "wave-vpn",
+        "schema",
+        "airvpn-account-v1",
+    ]);
+    crate::process::output(&mut cmd, None, Duration::from_secs(10)).is_ok_and(|mut r| {
+        let listed = search_lists_item(&r.stdout);
+        r.stdout.zeroize();
+        r.stderr.zeroize();
+        listed
+    })
+}
+#[cfg(not(target_os = "linux"))]
+fn saved_item_listed() -> bool {
+    false
+}
 #[cfg(not(target_os = "linux"))]
 fn call(_action: &str, _input: Option<&[u8]>) -> Result<Zeroizing<Vec<u8>>> {
     anyhow::bail!("Saved credentials currently require Linux Secret Service")
@@ -150,6 +184,7 @@ impl Storage {
                 ensure!(bytes.len() <= 16384, "Saved account is too large");
                 return decode_credentials(&bytes).map(Some);
             }
+            ensure!(!saved_item_listed(), KEYRING_LOCKED);
         }
         // Migrate an existing fallback to the keyring after successful sign-in.
         load_plaintext(directory)

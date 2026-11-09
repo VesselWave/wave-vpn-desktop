@@ -4,7 +4,7 @@ How Wave VPN for Linux behaves, and what to do when something goes wrong. For in
 
 ## Signing in
 
-Sign in with your AirVPN username and password. Wave VPN saves them in your desktop keyring (Secret Service), so install `libsecret-tools` and keep the keyring unlocked. If no keyring is available, the app warns you before sign-in that credentials would be stored in plain text in a private local file. **Sign out** removes the saved account.
+Sign in with your AirVPN username and password. Wave VPN saves them in your desktop keyring (Secret Service), so install `libsecret-tools` and keep the keyring unlocked. If no keyring is available, the app warns you before sign-in that credentials would be stored in plain text in a private local file. **Sign out** removes the saved account. With automatic login, your desktop may ask you to unlock the keyring when Wave starts. If you cancel that prompt, Wave says the keyring is locked and offers **Retry**; your saved account is still there.
 
 Already use Eddie? **Import Eddie profile** on the sign-in screen reads Eddie's profile (XML, v1 and v2, with default, password or keyring protection) and fills in the sign-in form. It never changes Eddie's files or keyring entry. Advanced Eddie settings aren't imported.
 

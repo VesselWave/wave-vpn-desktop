@@ -94,6 +94,8 @@ enum Message {
     Connect,
     Disconnect,
     Recover,
+    /// Load the saved account again (after unlocking the keyring).
+    RestoreAccount,
     Refresh,
     ServerView(ServerView),
     Sort(Sort),
@@ -232,6 +234,8 @@ struct Wave {
     import_password: String,
     importing: bool,
     keyring_busy: bool,
+    /// The saved account could not be read (locked keyring): offer Retry.
+    restore_failed: bool,
     storage: Option<wave_protocol::credentials::Storage>,
     network_busy: bool,
     lock_change: Option<bool>,
@@ -346,6 +350,7 @@ impl Wave {
             import_password: String::new(),
             importing: false,
             keyring_busy: false,
+            restore_failed: false,
             storage: None,
             network_busy: false,
             lock_change: None,
@@ -422,17 +427,7 @@ impl Wave {
             let store = LatencyStore::in_directory(&preferences::directory());
             store.load(&mut app.latency, Instant::now());
             app.latency_store = Some(store);
-            app.keyring_busy = true;
-            let tx = app.sender.clone();
-            let epoch = app.account_epoch;
-            std::thread::spawn(move || {
-                let storage = wave_protocol::credentials::Storage::detect();
-                let loaded = storage.load(&preferences::directory()).map_err(|_| {
-                    "Unable to restore your saved account. Unlock your keyring and try again."
-                        .to_owned()
-                });
-                let _ = tx.send(Event::StorageLoaded(epoch, storage, loaded));
-            });
+            app.restore_account();
         }
         if let Some(primary) = PRIMARY.lock().unwrap_or_else(|e| e.into_inner()).take() {
             // A second launch raises this window, also when hidden in the tray.
@@ -453,6 +448,27 @@ impl Wave {
                 iced::system::theme().map(Message::SystemTheme),
             ]),
         )
+    }
+    fn restore_account(&mut self) {
+        self.restore_failed = false;
+        if self.preview {
+            return;
+        }
+        self.keyring_busy = true;
+        let tx = self.sender.clone();
+        let epoch = self.account_epoch;
+        std::thread::spawn(move || {
+            let storage = wave_protocol::credentials::Storage::detect();
+            let loaded = storage.load(&preferences::directory()).map_err(|e| {
+                if e.to_string() == wave_protocol::credentials::KEYRING_LOCKED {
+                    wave_protocol::credentials::KEYRING_LOCKED.to_owned()
+                } else {
+                    "Unable to restore your saved account. Unlock your keyring, then choose Retry."
+                        .to_owned()
+                }
+            });
+            let _ = tx.send(Event::StorageLoaded(epoch, storage, loaded));
+        });
     }
     fn log(&mut self, level: Level, line: String) {
         let now = std::time::SystemTime::now()
@@ -765,7 +781,11 @@ impl Wave {
                                     return self.update(Message::SignIn);
                                 }
                                 Ok(None) => (),
-                                Err(error) => self.error = Some(error),
+                                Err(error) => {
+                                    self.restore_failed = true;
+                                    self.log(Level::Warn, error.clone());
+                                    self.error = Some(error);
+                                }
                             }
                         }
                         Event::SignedOut(epoch, result) => {
@@ -1271,6 +1291,12 @@ impl Wave {
                 if let Some(c) = &self.control {
                     c.lock().unwrap().stop();
                     self.status = "Disconnecting…".into();
+                }
+            }
+            Message::RestoreAccount => {
+                if self.account.is_none() && !self.keyring_busy && !self.busy {
+                    self.error = None;
+                    self.restore_account();
                 }
             }
             Message::Recover => {

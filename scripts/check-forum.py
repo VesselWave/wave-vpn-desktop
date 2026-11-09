@@ -62,6 +62,8 @@ REQUIRED = (
     'forum_u2404_b14_lost_network_lock_is_reported_and_restored',
     'forum_u2404_b14_saved_choice_says_the_lock_returns_on_connect',
     'forum_u2404_b14_lock_loss_needs_wave_state_and_a_missing_table',
+    'forum_u2404_b18_locked_keyring_offers_retry_instead_of_looking_signed_out',
+    'forum_u2404_b18_locked_item_is_told_apart_from_no_item',
     'forum_u2404_b19_second_launch_shows_the_first_window',
     'forum_u2404_b19_stale_socket_after_a_crash_is_replaced',
     'forum_u2404_b20_no_desktop_preference_follows_light',

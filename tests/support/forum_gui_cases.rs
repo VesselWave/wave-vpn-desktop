@@ -823,3 +823,28 @@ fn forum_u2404_b20_no_desktop_preference_follows_light() {
     let _ = app.update(Message::SystemTheme(iced::theme::Mode::Light));
     assert!(!app.system_dark);
 }
+
+// U2404 B-18: after autologin, Cancel in the keyring unlock prompt looked as
+// if the saved account was deleted. The locked keyring is named, logged and
+// offers Retry, which loads the saved account again.
+#[test]
+fn forum_u2404_b18_locked_keyring_offers_retry_instead_of_looking_signed_out() {
+    let mut app = app();
+    app.account = None;
+    app.sender
+        .send(Event::StorageLoaded(
+            app.account_epoch,
+            wave_protocol::credentials::Storage::Keyring,
+            Err(wave_protocol::credentials::KEYRING_LOCKED.into()),
+        ))
+        .unwrap();
+    let _ = app.update(Message::Tick);
+    assert!(app.restore_failed);
+    assert_eq!(
+        app.error.as_deref(),
+        Some(wave_protocol::credentials::KEYRING_LOCKED)
+    );
+    assert!(app.logs.iter().any(|l| l.text.contains("locked keyring")));
+    let _ = app.update(Message::RestoreAccount);
+    assert!(!app.restore_failed && app.error.is_none());
+}

@@ -262,8 +262,19 @@ pub fn shell(app: &Wave) -> Element<'_, Message> {
     let mut main = column![].spacing(16);
     if app.prefs.options.on("show_errors") {
         if let Some(e) = &app.error {
+            let mut banner = row![text(e).size(13).style(theme::danger).width(Fill)]
+                .spacing(12)
+                .align_y(Alignment::Center);
+            // U2404 B-18: a locked keyring is not a deleted account.
+            if app.restore_failed && app.account.is_none() {
+                banner = banner.push(
+                    button(text("Retry").size(13))
+                        .style(theme::outline)
+                        .on_press_maybe((!app.keyring_busy).then_some(Message::RestoreAccount)),
+                );
+            }
             main = main.push(
-                container(text(e).size(13).style(theme::danger))
+                container(banner)
                     .padding(12)
                     .width(Fill)
                     .style(theme::panel),

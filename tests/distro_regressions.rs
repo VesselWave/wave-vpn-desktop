@@ -182,3 +182,15 @@ fn forum_u2404_b14_lock_loss_needs_wave_state_and_a_missing_table() {
         assert!(source.contains(needle), "{needle}");
     }
 }
+
+// B-18: a locked item is still listed by `secret-tool search` (no --unlock),
+// which tells a locked keyring apart from no saved account.
+#[test]
+fn forum_u2404_b18_locked_item_is_told_apart_from_no_item() {
+    use wave_protocol::credentials::search_lists_item;
+    assert!(search_lists_item(
+        b"[/org/freedesktop/secrets/collection/login/12]\nlabel = Wave VPN AirVPN account\nattribute.application = wave-vpn\n"
+    ));
+    assert!(!search_lists_item(b""));
+    assert!(!search_lists_item(b"secret-tool: No such secret item\n"));
+}
