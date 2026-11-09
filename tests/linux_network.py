@@ -300,6 +300,36 @@ while True: time.sleep(60)
     assert http("198.18.0.2")
     print("PASS foreign resolv.conf rewrites are undone during a session; Recover keeps a newer foreign resolver", flush=True)
 
+    # U2404 B-14: `nft flush ruleset` while connected and while a retained
+    # lock is idle. The worker restores its table itself; idle, the helper
+    # reports the loss (lock_lost) and Recover keeps the lock.
+    def flush():
+        run("nft", "flush", "ruleset")
+        run("nft", "-f", "-", data='table inet unrelated { comment "must survive Wave"; }\n')
+
+    proc, events = worker(request)
+    connected(proc, events)
+    flush()
+    deadline = time.monotonic() + 8
+    while time.monotonic() < deadline and "wave_vpn" not in run("nft", "list", "tables"):
+        time.sleep(.2)
+    assert "wave_vpn" in run("nft", "list", "tables"), "worker did not restore its flushed table"
+    assert not http("198.18.0.2"), "restored table does not block plaintext"
+    assert http("10.77.0.1"), "tunnel broken after the table was restored"
+    disconnect(proc)
+    stopped(proc)
+    flush()
+    status_output = run(*worker_command(binary, "network-status"))
+    assert '"lock_lost"' in status_output, "flushed retained lock not reported"
+    assert http("198.18.0.2")
+    run(*worker_command(binary, "recover"))
+    assert not http("198.18.0.2"), "Recover dropped a lock another program removed"
+    assert '"lock_lost"' not in run(*worker_command(binary, "network-status"))
+    run(*worker_command(binary, "lock-disable"))
+    assert '"lock_lost"' not in run(*worker_command(binary, "network-status"))
+    assert http("198.18.0.2")
+    print("PASS a flushed ruleset is restored while connected, reported while idle and kept by Recover", flush=True)
+
     def actual_status():
         output = run(*worker_command(binary, "network-status"))
         return next(json.loads(line)["status"] for line in output.splitlines() if line.startswith('{') and json.loads(line).get("event") == "network_status")

@@ -249,6 +249,10 @@ pub fn network_status() -> Result<()> {
     {
         status.worker_active = fs2::FileExt::try_lock_exclusive(&lock).is_err();
     }
+    // Separate line: older controllers reject unknown status fields.
+    if crate::protection::lock_lost(published_protection(), status.enabled) {
+        println!("{}", serde_json::json!({"event":"lock_lost"}));
+    }
     println!(
         "{}",
         serde_json::json!({"event":"network_status", "status":status})
@@ -290,6 +294,41 @@ fn remove_firewall() -> Result<()> {
         run("nft", &["delete", "table", "inet", "wave_vpn"], None)?;
     }
     publish_protection(false)?;
+    Ok(())
+}
+/// What Wave applied last, from the file `publish_protection` writes on every
+/// Wave change. Never proof of protection on its own; only combined with an
+/// actual query it shows that another program removed the table.
+fn published_protection() -> Option<bool> {
+    let bytes = std::fs::read("/run/wave-vpn-protection.json").ok()?;
+    serde_json::from_slice::<serde_json::Value>(&bytes).ok()?["enabled"].as_bool()
+}
+/// Monitor (U2404 B-14): `nft flush ruleset`, a firewall reload or a Docker
+/// reinstall removed Wave's table. Put it back as this session needs it (it
+/// also carries the tunnel's connection marks) and say so.
+fn restore_lost_firewall(r: &Request) -> Result<()> {
+    if owned_firewall().unwrap_or(true) {
+        return Ok(());
+    }
+    let locked = r.options.on("netlock") || persistent()?;
+    set_firewall(
+        &r.options,
+        Some(&r.profile),
+        locked,
+        &exemptions(&r.bootstrap),
+    )?;
+    eprintln!(
+        "Warning: {} removed by another program (for example `nft flush ruleset` or a firewall reload); Wave restored them",
+        if locked {
+            "Network Lock rules were"
+        } else {
+            "Wave's firewall rules were"
+        }
+    );
+    println!(
+        "{}",
+        serde_json::json!({"event":"protection","enabled":locked})
+    );
     Ok(())
 }
 fn publish_protection(enabled: bool) -> Result<()> {
@@ -980,6 +1019,7 @@ fn monitor(r: &mut Request, stop: &AtomicBool, changes: &mpsc::Receiver<bool>) -
         .is_some_and(|s| s.resolver_swapped);
     let expected_resolver = resolver::tunnel_resolv_conf(&r.profile.dns);
     let mut reasserts = resolver::Reasserts::default();
+    let mut ticks: u64 = 0;
     // Generate traffic even when keepalive is disabled, to initiate the handshake.
     for dns in &r.profile.dns {
         if let Ok(ip) = dns.parse::<std::net::IpAddr>() {
@@ -996,6 +1036,10 @@ fn monitor(r: &mut Request, stop: &AtomicBool, changes: &mpsc::Receiver<bool>) -
         // Before verification too, so it always tests the tunnel resolver.
         if resolver_file {
             reassert_resolver(&expected_resolver, &mut reasserts)?;
+        }
+        ticks += 1;
+        if ticks.is_multiple_of(5) {
+            restore_lost_firewall(r)?;
         }
         for enabled in changes.try_iter() {
             r.options.set("netlock", enabled.to_string());
@@ -1226,7 +1270,9 @@ pub fn worker() -> Result<()> {
 }
 pub fn recover() -> Result<()> {
     let _guard = exclusive()?;
-    let retain = actual_protection()?;
+    // A lock another program removed is still the user's lock: keep it.
+    let actual = actual_protection()?;
+    let retain = actual || crate::protection::lock_lost(published_protection(), Some(actual));
     cleanup(&Options::default(), retain, &[])?;
     println!(
         "Tunnel resources restored; Network Lock {}",

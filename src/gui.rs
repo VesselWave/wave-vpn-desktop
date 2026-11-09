@@ -168,6 +168,8 @@ fn wakeups() -> impl iced::futures::Stream<Item = Message> {
     *WAKE.lock().unwrap_or_else(|e| e.into_inner()) = Some(waker);
     iced::futures::StreamExt::map(wakeups, |()| Message::Tick)
 }
+const LOCK_REMOVED_RESTORED: &str = "Network Lock was removed by another program (for example a firewall reload or `nft flush ruleset`). Wave turned it back on, as you chose.";
+const LOCK_REMOVED_OFF: &str = "Network Lock was removed by another program (for example a firewall reload or `nft flush ruleset`). Traffic is not blocked; turn it on again in Settings if you want it.";
 /// Drives timers (deadlines, retries, status queries) and the uptime display;
 /// events do not wait for it.
 const IDLE_TICK: Duration = Duration::from_secs(1);
@@ -289,6 +291,8 @@ struct Wave {
     preview: bool,
     persistent_lock: bool,
     lock_installed: bool,
+    /// When a lost Network Lock was last re-applied (at most once a minute).
+    lock_restored_at: Option<Instant>,
     /// Tests: pretend the helper is (not) installed and record privileged
     /// actions with their input instead of running them.
     #[cfg(test)]
@@ -391,6 +395,7 @@ impl Wave {
             preview: std::env::var_os("WAVE_PREVIEW").is_some(),
             persistent_lock: false,
             lock_installed: false,
+            lock_restored_at: None,
             #[cfg(test)]
             test_helper: None,
             #[cfg(test)]
@@ -584,8 +589,12 @@ impl Wave {
                                         self.guarded = enabled;
                                     }
                                     self.persistent_lock = status.persistent;
+                                    let lost = status.lost;
                                     self.protection = status;
                                     self.protection_revision = Some(revision);
+                                    if lost {
+                                        self.lock_lost();
+                                    }
                                     // First confirmed lock this launch (e.g. restored at
                                     // boot): make sure it allows the latest bootstrap.
                                     if (self.guarded || self.persistent_lock)
@@ -1397,6 +1406,33 @@ impl Wave {
             seed,
         ))
     }
+    /// U2404 B-14: another program removed the Network Lock Wave applied
+    /// (`nft flush ruleset`, a firewall reload). Say so, and re-apply it when
+    /// it is the user's choice, at most once a minute. While connected the
+    /// worker restores its own table; a pending action settles first.
+    fn lock_lost(&mut self) {
+        if self.control.is_some() || self.network_busy || self.lock_change.is_some() {
+            return;
+        }
+        let wanted = self.prefs.options.on("netlock") || self.persistent_lock;
+        let due = self
+            .lock_restored_at
+            .is_none_or(|t| t.elapsed() >= Duration::from_secs(60));
+        let message = if wanted && due && self.helper_available() {
+            self.lock_restored_at = Some(Instant::now());
+            self.lock_change = Some(true);
+            self.privileged("lock-enable");
+            LOCK_REMOVED_RESTORED
+        } else if wanted && !due {
+            return;
+        } else {
+            LOCK_REMOVED_OFF
+        };
+        if self.error.as_deref() != Some(message) {
+            self.error = Some(message.into());
+            self.log(Level::Warn, message.into());
+        }
+    }
     fn helper_available(&self) -> bool {
         #[cfg(test)]
         if let Some(available) = self.test_helper {
@@ -1660,10 +1696,17 @@ impl Wave {
                     Duration::from_secs(8),
                 )?;
                 anyhow::ensure!(output.status.success(), "Networking status unavailable");
+                let mut lost = false;
                 for line in output.stdout.split(|b| *b == b'\n') {
                     if let Ok(value) = serde_json::from_slice::<serde_json::Value>(line) {
+                        if value["event"] == "lock_lost" {
+                            lost = true;
+                        }
                         if value["event"] == "network_status" {
-                            return Ok(serde_json::from_value(value["status"].clone())?);
+                            let mut status: wave_protocol::protection::Status =
+                                serde_json::from_value(value["status"].clone())?;
+                            status.lost = lost;
+                            return Ok(status);
                         }
                     }
                 }

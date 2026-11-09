@@ -25,6 +25,21 @@ fn link<'a>(label: &'a str, msg: Message) -> Element<'a, Message> {
         .padding([4, 6])
         .into()
 }
+/// The Network Lock row's description. A saved "on" choice without an
+/// applied lock (after a reboot) says the next Connect turns it on.
+pub fn network_lock_summary(app: &Wave) -> &'static str {
+    if app.network_busy {
+        "Updating…"
+    } else if !app.protection_known {
+        "Status unknown. Enable protection or explicitly disable it; a saved preference is not confirmation."
+    } else if app.guarded {
+        "Stays on when you disconnect. Turn off to restore internet access."
+    } else if app.prefs.options.on("netlock") {
+        "Off now. Your saved choice turns it on again when you connect."
+    } else {
+        "Off. Internet access is available without the VPN."
+    }
+}
 pub fn target_label(t: &Target) -> String {
     match t {
         Target::Best => "Best server".into(),
@@ -1180,21 +1195,34 @@ fn settings(app: &Wave) -> Element<'_, Message> {
             "Network Lock",
             vec![setting_row(
                 "Block traffic outside VPN",
-                if app.network_busy {
-                    "Updating…"
-                } else if !app.protection_known {
-                    "Status unknown. Enable protection or explicitly disable it; a saved preference is not confirmation."
-                } else if app.guarded {
-                    "Stays on when you disconnect. Turn off to restore internet access."
-                } else {
-                    "Off. Internet access is available without the VPN."
-                },
+                network_lock_summary(app),
                 if app.protection_known {
-                    toggler(app.guarded).size(20).style(theme::toggle)
-                        .on_toggle_maybe(available.then_some(|enabled| Message::LockAction(if enabled { "lock-enable" } else { "lock-disable" }))).into()
+                    toggler(app.guarded)
+                        .size(20)
+                        .style(theme::toggle)
+                        .on_toggle_maybe(available.then_some(|enabled| {
+                            Message::LockAction(if enabled {
+                                "lock-enable"
+                            } else {
+                                "lock-disable"
+                            })
+                        }))
+                        .into()
                 } else {
-                    row![button(text("Enable").size(12)).style(theme::ghost).on_press_maybe(available.then_some(Message::LockAction("lock-enable"))),
-                        button(text("Disable").size(12)).style(theme::ghost).on_press_maybe(available.then_some(Message::LockAction("lock-disable")))].spacing(4).into()
+                    row![
+                        button(text("Enable").size(12))
+                            .style(theme::ghost)
+                            .on_press_maybe(
+                                available.then_some(Message::LockAction("lock-enable"))
+                            ),
+                        button(text("Disable").size(12))
+                            .style(theme::ghost)
+                            .on_press_maybe(
+                                available.then_some(Message::LockAction("lock-disable"))
+                            )
+                    ]
+                    .spacing(4)
+                    .into()
                 },
             )],
         ));

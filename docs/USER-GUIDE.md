@@ -31,6 +31,7 @@ Network Lock is an nftables firewall that blocks traffic outside the tunnel. It'
 
 - Once on, it stays on after **Disconnect**, **Quit**, **Recover** and crashes, until you turn it off. That's deliberate: a crash must never quietly unblock your traffic.
 - You can toggle it while connected; the tunnel keeps running and your choice is remembered.
+- If another program removes it (for example `sudo nft flush ruleset`, an `nftables.service` restart or another firewall manager reloading), Wave notices within seconds. While connected, Wave puts its rules back and notes it in Logs. While disconnected, Wave shows a warning and turns the lock back on when that's your saved choice. A lock you didn't choose is only reported. After a reboot the lock is off until you connect; Settings then says your saved choice turns it on again when you connect.
 - Allowed while locked: loopback, DHCP and IPv6 neighbour discovery, the tunnel itself, and AirVPN's sign-in addresses (built-in and from the latest server list; TCP to the listed port only). LAN access and ping outside the tunnel are off by default (**Settings → Network Lock**).
 - To get ordinary internet back, turn it off in **Settings**, or run `sudo wave-vpn lock-disable`.
 

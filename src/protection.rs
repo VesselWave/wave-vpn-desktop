@@ -8,6 +8,16 @@ pub struct Status {
     pub recovery_needed: bool,
     pub worker_active: bool,
     pub persistent: bool,
+    /// Wave applied Network Lock last and its table is gone (removed by
+    /// another program). Sent as a separate `lock_lost` line, so older
+    /// controllers keep parsing this status.
+    #[serde(skip)]
+    pub lost: bool,
+}
+/// `published`: what Wave applied last (/run/wave-vpn-protection.json);
+/// `actual`: the nftables query. Unknown on either side is never a loss.
+pub fn lock_lost(published: Option<bool>, actual: Option<bool>) -> bool {
+    published == Some(true) && actual == Some(false)
 }
 /// Requires an actual nftables query, never a cached preference/status file.
 pub fn table_enabled(document: &serde_json::Value) -> Result<bool> {

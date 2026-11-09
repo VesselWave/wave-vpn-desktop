@@ -700,3 +700,88 @@ fn forum_u2404_b11_background_events_wake_the_ui_without_fast_polling() {
         Some(Some(Message::Tick))
     ));
 }
+
+// U2404 B-14: `nft flush ruleset` removed Network Lock and the GUI quietly
+// flipped to "Network lock off". The helper reports the loss (the lock it
+// applied last is gone); the GUI warns, logs it and turns the lock back on
+// because the user's choice is on. A lost lock the user had not chosen is
+// only reported, and nothing is re-applied while a worker owns the firewall.
+#[test]
+fn forum_u2404_b14_lost_network_lock_is_reported_and_restored() {
+    let lost = || wave_protocol::protection::Status {
+        enabled: Some(false),
+        lost: true,
+        ..Default::default()
+    };
+    let mut app = app();
+    app.test_helper = Some(true);
+    app.prefs.options.set("netlock", "true".into());
+    app.transport_line(r#"{"event":"protection","enabled":true}"#.into());
+    app.sender
+        .send(Event::NetworkStatus(app.network_revision, Ok(lost())))
+        .unwrap();
+    let _ = app.update(Message::Tick);
+    assert_eq!(app.test_privileged.last().unwrap().0, "lock-enable");
+    let banner = app.error.clone().unwrap();
+    assert!(
+        banner.contains("removed by another program") && banner.contains("turned it back on"),
+        "{banner}"
+    );
+    assert!(app
+        .logs
+        .iter()
+        .any(|l| l.level == Level::Warn && l.text.contains("removed by another program")));
+    // The confirmation keeps the user's choice on.
+    app.transport_line(r#"{"event":"protection","enabled":true}"#.into());
+    let _ = app.update(Message::Tick);
+    assert!(app.guarded && app.prefs.options.on("netlock"));
+    // Repeated losses are not re-applied in a tight loop.
+    app.network_busy = false;
+    app.privileged_action = None;
+    app.sender
+        .send(Event::NetworkStatus(app.network_revision, Ok(lost())))
+        .unwrap();
+    let _ = app.update(Message::Tick);
+    assert_eq!(app.test_privileged.len(), 1);
+
+    // Not the user's choice: warn only.
+    let mut app = self::app();
+    app.test_helper = Some(true);
+    app.sender
+        .send(Event::NetworkStatus(app.network_revision, Ok(lost())))
+        .unwrap();
+    let _ = app.update(Message::Tick);
+    assert!(app.test_privileged.is_empty());
+    assert!(app
+        .error
+        .as_deref()
+        .unwrap()
+        .contains("removed by another program"));
+
+    // Connected: the worker restores its own table; the GUI does not race it.
+    let mut app = self::app();
+    app.test_helper = Some(true);
+    app.prefs.options.set("netlock", "true".into());
+    running(&mut app, "Achernar");
+    app.sender
+        .send(Event::NetworkStatus(app.network_revision, Ok(lost())))
+        .unwrap();
+    let _ = app.update(Message::Tick);
+    assert!(app.test_privileged.is_empty());
+    // The worker's notice is a warning in Logs.
+    app.transport_line("Warning: Network Lock rules were removed by another program (for example `nft flush ruleset` or a firewall reload); Wave restored them".into());
+    assert_eq!(app.logs.last().unwrap().level, Level::Warn);
+}
+
+// U2404 B-14: a saved "on" choice with no lock applied (after a reboot) is
+// said in Settings, so the next Connect turning it on is not a surprise.
+#[test]
+fn forum_u2404_b14_saved_choice_says_the_lock_returns_on_connect() {
+    let mut app = app();
+    app.prefs.options.set("netlock", "true".into());
+    app.transport_line(r#"{"event":"protection","enabled":false}"#.into());
+    let text = crate::views::network_lock_summary(&app);
+    assert!(text.contains("turns it on again when you connect"), "{text}");
+    app.prefs.options.set("netlock", "false".into());
+    assert!(!crate::views::network_lock_summary(&app).contains("connect"));
+}

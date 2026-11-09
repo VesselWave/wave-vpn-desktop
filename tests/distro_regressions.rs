@@ -162,3 +162,23 @@ fn forum_u2404_b22_repeated_rewrites_warn_once_per_minute() {
     assert!(r.warn(t + Duration::from_secs(61)));
     assert_eq!(r.count, 3);
 }
+
+// B-14: only a lock Wave applied last and that is now gone counts as lost;
+// a cached file alone never claims protection either way.
+#[test]
+fn forum_u2404_b14_lock_loss_needs_wave_state_and_a_missing_table() {
+    use wave_protocol::protection::lock_lost;
+    assert!(lock_lost(Some(true), Some(false)));
+    assert!(!lock_lost(Some(true), Some(true)));
+    assert!(!lock_lost(Some(false), Some(false)));
+    assert!(!lock_lost(None, Some(false)));
+    assert!(!lock_lost(Some(true), None));
+    let source = include_str!("../src/platform/linux.rs");
+    for needle in [
+        "fn restore_lost_firewall",
+        "protection::lock_lost(",
+        "\"lock_lost\"",
+    ] {
+        assert!(source.contains(needle), "{needle}");
+    }
+}
