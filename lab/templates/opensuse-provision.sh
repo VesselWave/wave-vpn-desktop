@@ -67,7 +67,10 @@ install_phase() {
             -e "s/^DISPLAYMANAGER_AUTOLOGIN=.*/DISPLAYMANAGER_AUTOLOGIN=\"$user\"/" /etc/sysconfig/displaymanager
     fi
     install -d /etc/sddm.conf.d
-    printf '[Autologin]\nUser=%s\nSession=plasma\nRelogin=false\n' "$user" > /etc/sddm.conf.d/zz-wave-lab-autologin.conf
+    # Plasma's Wayland session file is plasma.desktop upstream, plasmawayland.desktop on openSUSE.
+    session=plasma
+    [[ -e /usr/share/wayland-sessions/plasma.desktop ]] || session=plasmawayland
+    printf '[Autologin]\nUser=%s\nSession=%s\nRelogin=false\n' "$user" "$session" > /etc/sddm.conf.d/zz-wave-lab-autologin.conf
     # openSUSE starts the alternative's manager through display-manager-legacy.service.
     systemctl enable display-manager-legacy.service 2>/dev/null || systemctl enable sddm.service
     systemctl set-default graphical.target

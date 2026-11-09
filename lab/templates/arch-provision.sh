@@ -54,7 +54,10 @@ install_phase() {
 
     # SDDM with Plasma (Wayland) and autologin (switch with labctl login-mode).
     install -d /etc/sddm.conf.d
-    printf '[Autologin]\nUser=%s\nSession=plasma\nRelogin=false\n' "$user" > /etc/sddm.conf.d/zz-wave-lab-autologin.conf
+    # Plasma's Wayland session file is plasma.desktop upstream, plasmawayland.desktop on openSUSE.
+    session=plasma
+    [[ -e /usr/share/wayland-sessions/plasma.desktop ]] || session=plasmawayland
+    printf '[Autologin]\nUser=%s\nSession=%s\nRelogin=false\n' "$user" "$session" > /etc/sddm.conf.d/zz-wave-lab-autologin.conf
     systemctl enable sddm.service
     systemctl set-default graphical.target
 
