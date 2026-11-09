@@ -179,6 +179,8 @@ struct Wave {
     status_checked: Instant,
     checks: wave_protocol::checks::Results,
     retryable: bool,
+    /// A helper refusal seen during this connection, explained on its end.
+    helper_problem: Option<&'static str>,
     retry_attempts: u32,
     diagnostics: Option<String>,
     diagnostics_path: String,
@@ -279,6 +281,7 @@ impl Wave {
             status_checked: Instant::now() - Duration::from_secs(10),
             checks: Default::default(),
             retryable: false,
+            helper_problem: None,
             retry_attempts: 0,
             diagnostics: None,
             diagnostics_path: String::new(),
@@ -774,8 +777,16 @@ impl Wave {
                             let retry = !message.is_empty()
                                 && self.retryable
                                 && !cancelled
+                                && self.helper_problem.is_none()
                                 && self.prefs.options.on("reconnect");
-                            if let Some(server) = &self.active_server {
+                            // Penalize a server only for a failure or an explicit
+                            // switch away, never for a user Disconnect or Cancel.
+                            let failed = !message.is_empty() && !cancelled;
+                            if let Some(server) = self
+                                .active_server
+                                .as_ref()
+                                .filter(|_| failed || self.switching)
+                            {
                                 self.penalties.insert(
                                     server.name.clone(),
                                     Instant::now()
@@ -816,9 +827,13 @@ impl Wave {
                             self.since = None;
                             self.rx_rate = 0.;
                             self.tx_rate = 0.;
+                            let helper = self.helper_problem.take();
                             if !message.is_empty() {
-                                let message =
-                                    self.checks.failure().map(str::to_owned).unwrap_or(message);
+                                let message = helper
+                                    .or_else(|| helper_problem(&message))
+                                    .map(str::to_owned)
+                                    .or_else(|| self.checks.failure().map(str::to_owned))
+                                    .unwrap_or(message);
                                 self.error = Some(message.clone());
                                 self.log(Level::Error, message);
                             } else {
@@ -843,7 +858,9 @@ impl Wave {
                                 Err(e) => {
                                     self.last_failure =
                                         wave_protocol::diagnostics::Failure::Recovery;
-                                    self.error = Some(e.clone());
+                                    self.error = Some(
+                                        helper_problem(&e).map(str::to_owned).unwrap_or(e.clone()),
+                                    );
                                     self.log(Level::Error, e);
                                 }
                             }
@@ -853,12 +870,9 @@ impl Wave {
                         }
                     }
                 }
+                let snapshot = self.tray_snapshot();
                 if let Some(tray) = &mut self.tray {
-                    tray.update(tray::Snapshot {
-                        status: self.status.clone(),
-                        active: self.control.is_some(),
-                        signed_in: self.account.is_some(),
-                    });
+                    tray.update(snapshot);
                 }
                 if self.window.is_none() && !self.tray.as_ref().is_some_and(|t| t.visible()) {
                     return self.update(Message::Show);
@@ -1094,6 +1108,7 @@ impl Wave {
                         self.network_revision = self.network_revision.wrapping_add(1);
                         self.checks = Default::default();
                         self.retryable = false;
+                        self.helper_problem = None;
                         let checks = self
                             .manifest
                             .as_ref()
@@ -1213,9 +1228,7 @@ impl Wave {
         use anyhow::Context;
         let account = self.account.as_ref().context("Sign in first")?;
         let m = self.manifest.as_ref().context("Load servers first")?;
-        let s = self
-            .selected()
-            .context("No available server matches this target")?;
+        let s = self.selected().with_context(|| self.no_server_reason())?;
         let port = self.prefs.options.get("port");
         let mode = if port.is_empty() {
             m.modes.first()
@@ -1413,6 +1426,81 @@ impl Wave {
                 .len()
         })
     }
+    /// Network Lock is confirmed on and no tunnel carries traffic: apps have
+    /// no internet. Never claimed from a saved preference.
+    fn blocking_traffic(&self) -> bool {
+        self.protection_known && self.guarded && self.since.is_none()
+    }
+    /// The status shown in the sidebar, Overview and tray. An idle retained
+    /// lock is not just "Disconnected": traffic is blocked.
+    fn display_status(&self) -> String {
+        if self.blocking_traffic()
+            && self.control.is_none()
+            && self.retry_at.is_none()
+            && self.status == "Disconnected"
+        {
+            "Blocking traffic".into()
+        } else {
+            self.status.clone()
+        }
+    }
+    /// Overview's protection line: why status is unknown, or that traffic
+    /// is blocked and how to restore it.
+    fn protection_note(&self) -> Option<&'static str> {
+        if !self.protection_known {
+            Some(if self.helper_missing() {
+                HELPER_MISSING
+            } else {
+                "Protection status is unavailable. No protection claim is made until the networking service confirms it."
+            })
+        } else if self.blocking_traffic() {
+            Some("Network Lock is blocking traffic: apps have no internet until you connect or choose Turn off Network Lock. AirVPN sign-in remains allowed.")
+        } else {
+            None
+        }
+    }
+    fn tray_snapshot(&self) -> tray::Snapshot {
+        tray::Snapshot {
+            status: self.display_status(),
+            // A pending reconnect is cancellable too: offer Disconnect, not
+            // an immediate Connect that skips the backoff.
+            active: self.control.is_some() || self.retry_at.is_some(),
+            signed_in: self.account.is_some(),
+        }
+    }
+    /// The power button cancels/disconnects instead of connecting.
+    fn power_cancels(&self) -> bool {
+        self.control.is_some() || self.retry_at.is_some() || self.since.is_some()
+    }
+    /// Device names to choose from; None hides the setting (one device).
+    fn device_choices(&self) -> Option<Vec<String>> {
+        let a = self.account.as_ref()?;
+        (a.devices.len() > 1).then(|| a.devices.iter().map(|d| d.name.clone()).collect())
+    }
+    /// The helper is not installed, so status queries cannot answer.
+    fn helper_missing(&self) -> bool {
+        #[cfg(test)]
+        if let Some(available) = self.test_helper {
+            return !available;
+        }
+        !self.preview && !wave_protocol::service::available()
+    }
+    /// Why the target matches no available server, naming it.
+    fn no_server_reason(&self) -> String {
+        match &self.prefs.target {
+            Target::Best => {
+                "No AirVPN server is available right now. Refresh the server list, then try again."
+                    .into()
+            }
+            Target::Country(c) => format!(
+                "No server in {} is available right now. Choose another country or Best server.",
+                views::country(c)
+            ),
+            Target::Server(n) => {
+                format!("{n} is not available right now. Choose another server or Best server.")
+            }
+        }
+    }
     fn cancel_measurement(&mut self) {
         self.latency_cancel.store(true, Ordering::Relaxed);
         self.latency.cancel();
@@ -1551,6 +1639,9 @@ impl Wave {
                 self.lock_installed = v["installed"].as_bool().unwrap_or(false);
                 return;
             }
+        }
+        if let Some(problem) = helper_problem(&line) {
+            self.helper_problem = Some(problem);
         }
         if line.contains("Connected to WireGuard server") {
             self.connected();
@@ -1709,6 +1800,26 @@ const KEEPING_SERVERS: &str = "Keeping the current server list";
 const EXEMPTION_RETRY_MIN: Duration = Duration::from_secs(30);
 const EXEMPTION_RETRY_MAX: Duration = Duration::from_secs(15 * 60);
 const HELPER_OUTDATED: &str = "Network Lock could not follow AirVPN's updated bootstrap addresses. The installed networking helper may be older than this app: reinstall it with the installer (sudo bash scripts/install.sh install), then reopen Wave VPN. Wave retries automatically.";
+const HELPER_MISSING: &str = "The networking helper isn't installed yet, so protection status is unknown. Wave sets it up with one administrator prompt the first time you connect or change Network Lock.";
+const HELPER_SETUP_REFUSED: &str = "Wave needs one administrator authorization to install its networking helper, and it was declined or unavailable. Press Connect again and approve the system prompt, or run sudo wave-vpn service-install in a terminal.";
+const HELPER_OTHER_USER: &str = "The networking helper is authorized for a different desktop user. To use Wave VPN from this account, run sudo wave-vpn service-install here.";
+const HELPER_REFUSED: &str = "The networking helper refused this request. It may be older than this app, for example after a package upgrade while connected: disconnect, run sudo wave-vpn service-install, then reopen Wave VPN.";
+/// Explain a helper refusal (missing authorization, other user, outdated
+/// helper) found in a helper line or error, instead of a generic failure.
+fn helper_problem(text: &str) -> Option<&'static str> {
+    if text.contains("not authorized for Wave VPN networking") {
+        Some(HELPER_OTHER_USER)
+    } else if text.contains("Networking service setup was cancelled or failed")
+        || text.contains("Networking service setup cancelled or timed out")
+        || text.contains(wave_protocol::service::PKEXEC_MISSING)
+    {
+        Some(HELPER_SETUP_REFUSED)
+    } else if helper_outdated(text) {
+        Some(HELPER_REFUSED)
+    } else {
+        None
+    }
+}
 /// Rejections an older helper gives for the newer lock input or action.
 fn helper_outdated(error: &str) -> bool {
     [
@@ -2075,6 +2186,9 @@ mod best_gui_cases;
 #[cfg(test)]
 #[path = "../tests/support/fix_gui_cases.rs"]
 mod fix_gui_cases;
+#[cfg(test)]
+#[path = "../tests/support/forum_gui_cases.rs"]
+mod forum_gui_cases;
 #[cfg(test)]
 #[path = "../tests/support/staff_gui_cases.rs"]
 mod staff_gui_cases;

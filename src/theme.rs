@@ -73,17 +73,24 @@ pub fn color(t: &Theme, role: Ink) -> Color {
         Ink::Text => c.text,
         Ink::Muted => c.muted,
         Ink::Faint => c.faint,
-        Ink::Accent => {
-            if t.extended_palette().is_dark {
-                Color::from_rgb8(110, 155, 255)
-            } else {
-                ACCENT
-            }
-        }
         Ink::OnAccent => Color::WHITE,
-        Ink::Success => Color::from_rgb8(63, 207, 142),
-        Ink::Warning => Color::from_rgb8(245, 165, 36),
-        Ink::Danger => Color::from_rgb8(255, 92, 92),
+        // Text roles mirror the Android tokens (accentFg/good/warning/danger);
+        // the light values keep state text readable on light surfaces.
+        role => {
+            let dark = t.extended_palette().is_dark;
+            let (r, g, b) = match (role, dark) {
+                (Ink::Accent, true) => (110, 155, 255),
+                (Ink::Accent, false) => (31, 87, 230),
+                (Ink::Success, true) => (63, 207, 142),
+                (Ink::Success, false) => (22, 163, 74),
+                (Ink::Warning, true) => (245, 165, 36),
+                (Ink::Warning, false) => (180, 83, 9),
+                // Danger.
+                (_, true) => (255, 92, 92),
+                (_, false) => (217, 45, 32),
+            };
+            Color::from_rgb8(r, g, b)
+        }
     }
 }
 pub fn ink(role: Ink) -> impl Fn(&Theme, svg::Status) -> svg::Style {
@@ -223,6 +230,19 @@ pub fn ghost(t: &Theme, status: button::Status) -> button::Style {
         },
         ..Default::default()
     }
+}
+/// A secondary action that must read as a button: ghost with a border.
+pub fn outline(t: &Theme, status: button::Status) -> button::Style {
+    let c = colors(t);
+    let mut style = ghost(t, status);
+    style.text_color = if matches!(status, button::Status::Disabled) {
+        c.faint
+    } else {
+        c.text
+    };
+    style.border.width = 1.;
+    style.border.color = c.border;
+    style
 }
 pub fn column_heading(t: &Theme, status: button::Status) -> button::Style {
     let mut style = ghost(t, status);

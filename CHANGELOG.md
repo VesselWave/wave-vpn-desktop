@@ -3,6 +3,15 @@
 ## Unreleased
 
 - Fixed a brief yellow warning after disconnecting: worker and recovery warnings now require a fresh networking status instead of using flags from the previous connection.
+- Android 0.1.5 parity and desktop bug intake ([parity audit](docs/qa/ANDROID-0.1.5-PARITY.md), [intake](docs/qa/DESKTOP-BUG-INTAKE.md)):
+  - A retained Network Lock now reads **Blocking traffic** in Overview, the sidebar and the tray, says apps have no internet, and offers **Turn off Network Lock**
+  - Disconnect and Cancel no longer penalize the server, so Best and country targets keep their choice; failures still fail over
+  - The tray offers Disconnect during a pending reconnect instead of an immediate Connect
+  - A missing, declined, outdated or other-user networking helper, or missing pkexec, is explained with the fix instead of a generic failure
+  - A target with no available server is refused with its name and a suggestion
+  - One malformed server address or WireGuard mode no longer rejects the whole server list; a list without servers or WireGuard modes is rejected so the cached one stays
+  - Light theme warning, error and link text and log timestamps meet 4.5:1 contrast, matching Android
+  - `scripts/check-forum.py` runs the named offline contracts and writes `target/forum/contracts.json`
 
 ## 0.1.3 · 2026-11-05 · early release
 

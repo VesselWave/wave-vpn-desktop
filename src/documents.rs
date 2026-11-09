@@ -114,6 +114,13 @@ impl Manifest {
             .min_by(|a, b| self.score(a).total_cmp(&self.score(b)))
     }
 }
+/// Comma-separated addresses; invalid entries are skipped, as Eddie's
+/// `IpAddresses.Add` does (it would resolve them; Wave never resolves here).
+fn addresses(list: &str) -> Vec<IpAddr> {
+    list.split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect()
+}
 pub fn parse_manifest(text: &str) -> Result<Manifest> {
     validate_document(text, "manifest")?;
     let doc = roxmltree::Document::parse(text)?;
@@ -133,19 +140,11 @@ pub fn parse_manifest(text: &str) -> Result<Manifest> {
         };
         servers.push(Server {
             name: attr("name").into(),
-            exits: attr("ips_exit")
-                .split(',')
-                .filter(|s| !s.trim().is_empty())
-                .map(|s| s.trim().parse())
-                .collect::<Result<_, _>>()?,
+            exits: addresses(attr("ips_exit")),
             support_check: attr("support_check") == "1" || attr("support_check") == "true",
             country: attr("country_code").to_lowercase(),
             location: attr("location").into(),
-            entries: attr("ips_entry")
-                .split(',')
-                .filter(|s| !s.trim().is_empty())
-                .map(|s| s.trim().parse())
-                .collect::<Result<_, _>>()?,
+            entries: addresses(attr("ips_entry")),
             bandwidth: attr("bw").parse().unwrap_or(0),
             capacity: attr("bw_max").parse().unwrap_or(0),
             users: attr("users").parse().unwrap_or(0),
@@ -160,11 +159,20 @@ pub fn parse_manifest(text: &str) -> Result<Manifest> {
         .descendants()
         .filter(|n| n.has_tag_name("mode") && n.attribute("type") == Some("wireguard"))
     {
-        let port = n.attribute("port").unwrap_or("").parse()?;
-        let entry_index = n.attribute("entry_index").unwrap_or("").parse()?;
-        ensure!(port != 0 && entry_index < 16, "Invalid WireGuard mode");
-        modes.push(Mode { port, entry_index });
+        // A malformed mode is skipped, like a malformed address: it must
+        // not discard an otherwise usable server list.
+        let port = n.attribute("port").and_then(|v| v.parse::<u16>().ok());
+        let entry_index = n.attribute("entry_index").and_then(|v| v.parse().ok());
+        if let (Some(port @ 1..), Some(entry_index @ 0..16)) = (port, entry_index) {
+            modes.push(Mode { port, entry_index });
+        }
     }
+    // Without servers or a WireGuard mode nothing can connect: fail, so the
+    // caller keeps its cached manifest instead of replacing it.
+    ensure!(
+        !servers.is_empty() && !modes.is_empty(),
+        "Manifest contains no usable server configuration"
+    );
     let urls = root
         .descendants()
         .filter(|n| n.has_tag_name("url"))

@@ -183,7 +183,7 @@ pub fn shell(app: &Wave) -> Element<'_, Message> {
                         },
                         ..Default::default()
                     }),
-                text(&app.status).size(13)
+                text(app.display_status()).size(13)
             ]
             .spacing(8)
             .align_y(Alignment::Center),
@@ -241,7 +241,7 @@ fn overview(app: &Wave) -> Element<'_, Message> {
         .center(136),
     )
     .padding(0)
-    .on_press(if live || connected {
+    .on_press(if app.power_cancels() {
         Message::Disconnect
     } else {
         Message::Connect
@@ -252,7 +252,7 @@ fn overview(app: &Wave) -> Element<'_, Message> {
             if let Some(since) = app.since.filter(|_| app.status == "Connected") {
                 format!("• Connected · {}", uptime(since.elapsed().as_secs()))
             } else {
-                format!("• {}", app.status)
+                format!("• {}", app.display_status())
             },
         )
         .size(13),
@@ -310,22 +310,18 @@ fn overview(app: &Wave) -> Element<'_, Message> {
         center = center.push(text(&app.activity).size(12).style(theme::muted));
     }
     if !live && !connected {
-        if let Some(a) = &app.account {
-            if a.devices.len() > 1 {
+        if let Some(devices) = app.device_choices() {
+            {
                 center = center.push(container(
                     row![
                         text("Device").size(14),
                         Space::new().width(Fill),
-                        pick_list(
-                            a.devices.iter().map(|d| d.name.clone()).collect::<Vec<_>>(),
-                            Some(app.prefs.device.clone()),
-                            Message::Device
-                        )
-                        .width(220)
-                        .padding([7, 10])
-                        .text_size(14)
-                        .style(theme::picker)
-                        .menu_style(theme::picker_menu)
+                        pick_list(devices, Some(app.prefs.device.clone()), Message::Device)
+                            .width(220)
+                            .padding([7, 10])
+                            .text_size(14)
+                            .style(theme::picker)
+                            .menu_style(theme::picker_menu)
                     ]
                     .align_y(Alignment::Center),
                 ));
@@ -347,10 +343,27 @@ fn overview(app: &Wave) -> Element<'_, Message> {
     if let Some(warning) = app.idle_network_warning() {
         center = center.push(text(warning).size(13).style(theme::warning));
     }
-    if !app.protection_known {
-        center = center.push(text("Protection status is unavailable. No protection claim is made until the networking service confirms it.").size(12).style(theme::muted));
-    } else if app.guarded && !connected {
-        center = center.push(text("Internet is blocked by Network Lock. AirVPN sign-in remains allowed. Turn Network Lock off explicitly to restore ordinary internet.").size(12).style(theme::muted));
+    if let Some(note) = app.protection_note() {
+        if app.blocking_traffic() {
+            // Retained blocking must be obvious and offer the way out, as an
+            // explicit choice; Connect remains the protected alternative.
+            let turn_off = button(text("Turn off Network Lock").size(13))
+                .padding([7, 16])
+                .style(theme::outline)
+                .on_press_maybe(
+                    (!app.network_busy && !live).then_some(Message::LockAction("lock-disable")),
+                );
+            center = center.push(
+                container(
+                    column![text(note).size(13).style(theme::warning), turn_off]
+                        .spacing(8)
+                        .align_x(Alignment::Center),
+                )
+                .center_x(Fill),
+            );
+        } else {
+            center = center.push(text(note).size(12).style(theme::muted));
+        }
     }
     if app.protection_known && app.guarded && !connected {
         if let Some(text_) = bootstrap_exceptions_text(app) {
@@ -891,7 +904,7 @@ fn logs(app: &Wave) -> Element<'_, Message> {
                     .font(theme::MONO)
                     .size(12)
                     .width(64)
-                    .style(theme::faint),
+                    .style(theme::muted),
                 text(l.level.label())
                     .font(theme::MONO)
                     .size(12)
@@ -899,7 +912,7 @@ fn logs(app: &Wave) -> Element<'_, Message> {
                     .style(match l.level {
                         Level::Error => theme::danger,
                         Level::Warn => theme::warning,
-                        _ => theme::faint,
+                        _ => theme::muted,
                     }),
                 text(&l.text).font(theme::MONO).size(12)
             ]

@@ -27,6 +27,19 @@ pub fn authorized_uid() -> Option<u32> {
         None
     }
 }
+/// Setup needs pkexec (polkit); some minimal installs lack it.
+pub const PKEXEC_MISSING: &str =
+    "Administrator authorization is unavailable because pkexec (polkit) is not installed";
+/// One-time setup asks for authorization through `pkexec`; explain its
+/// absence instead of surfacing a bare "No such file or directory".
+pub fn authorization_available(pkexec: &Path) -> Result<()> {
+    anyhow::ensure!(
+        pkexec.is_file(),
+        "{PKEXEC_MISSING}. Install your distribution's pkexec or polkit package, \
+         or run sudo wave-vpn service-install."
+    );
+    Ok(())
+}
 pub fn command(executable: &Path, action: &str) -> Result<Command> {
     command_cancellable(executable, action, || false)
 }
@@ -46,6 +59,7 @@ pub fn command_cancellable(
                 "Wave VPN isn't installed yet. Install the package for your system, or run \
                  ./install.sh from the downloaded folder, then open Wave VPN from your app menu."
             );
+            authorization_available(Path::new("/usr/bin/pkexec"))?;
             let mut setup = Command::new("/usr/bin/pkexec")
                 .arg(executable)
                 .arg("service-install")

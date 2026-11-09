@@ -19,7 +19,9 @@ New Kotlin and Rust implementations were written against these official sources:
 - [AirVPN/Eddie](https://github.com/AirVPN/Eddie), commit
   `67e213bfeae270f1f26c62f454f9dfadd5342df9`:
   `src/Lib.Core/Providers/Service.cs` (`FetchUrl`, `AssocToUtf8Bytes`, account,
-  manifest and WireGuard field mapping), `resources/providers/AirVPN.json`.
+  manifest and WireGuard field mapping), `resources/providers/AirVPN.json`,
+  `src/Lib.Core/IpAddresses.cs` (`Add`: an invalid server address is skipped
+  instead of failing the server list; Wave does not resolve such entries).
 - [AirVPN/EddieAndroid](https://gitlab.com/AirVPN/EddieAndroid), commit
   `1376541c05f6d8b2ca8b07ffb790b2c95615cf9c`:
   `SupportTools.java` (document version 295, request envelope, bandwidth units),
