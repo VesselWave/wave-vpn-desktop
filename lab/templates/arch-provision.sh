@@ -75,9 +75,11 @@ AutoSuspendAction=0
 EOF
     home=$(getent passwd "$user" | cut -d: -f6)
     install -d -o "$user" -g "$(id -gn "$user")" "$home/.config" "$home/.config/autostart"
-    for app in org.kde.plasma-welcome org.kde.discover.notifier; do
-        printf '[Desktop Entry]\nType=Application\nName=%s\nHidden=true\n' "$app" > "$home/.config/autostart/$app.desktop"
-    done
+    printf '[Desktop Entry]\nType=Application\nName=org.kde.discover.notifier\nHidden=true\n' \
+        > "$home/.config/autostart/org.kde.discover.notifier.desktop"
+    # Plasma's Welcome Center (started by a kded module) records the version it was shown for.
+    welcome=$(pacman -Q plasma-welcome | awk '{print $2}')
+    printf '[General]\nLastSeenVersion=%s\n' "${welcome%%-*}" > "$home/.config/plasma-welcomerc"
     chown -R "$user:$(id -gn "$user")" "$home/.config"
 
     # Recovery channels: guest agent and a serial getty.
