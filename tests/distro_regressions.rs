@@ -255,8 +255,8 @@ fn forum_final_f01_wg_reads_its_configuration_from_stdin() {
 
 // Final round F-02: a stale WAYLAND_DISPLAY with DISPLAY also set still made
 // winit panic, because it tried the missing Wayland socket first. The stale
-// value is dropped so X11 is used; with no X server either, that is an
-// ordinary error, never a panic.
+// value is dropped so a reachable X11 display is used. Here X is dead too
+// (no /tmp/.X11-unix/X97): the clean no-display exit, never a panic.
 #[cfg(target_os = "linux")]
 #[test]
 fn forum_final_f02_stale_wayland_socket_falls_back_to_x11() {
@@ -274,7 +274,7 @@ fn forum_final_f02_stale_wayland_socket_falls_back_to_x11() {
         .unwrap();
     let _ = std::fs::remove_dir_all(&runtime);
     let error = String::from_utf8_lossy(&output.stderr);
-    assert_ne!(output.status.code(), Some(101), "{error}");
+    assert_eq!(output.status.code(), Some(1), "{error}");
+    assert!(error.contains("display"), "{error}");
     assert!(!error.contains("panicked"), "{error}");
-    assert!(!error.to_lowercase().contains("wayland"), "{error}");
 }

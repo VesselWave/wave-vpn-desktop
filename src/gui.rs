@@ -2273,7 +2273,7 @@ fn main() -> iced::Result {
     #[cfg(target_os = "linux")]
     if !prepare_display() {
         eprintln!(
-            "wave-vpn-gui: no graphical display found (no Wayland socket and DISPLAY is not set). \
+            "wave-vpn-gui: no graphical display found (no Wayland socket or reachable X11 DISPLAY). \
              Open Wave VPN from your desktop session, or use the wave-vpn command."
         );
         std::process::exit(1);
@@ -2596,9 +2596,25 @@ fn prepare_display() -> bool {
     if wayland {
         return true;
     }
-    if set("DISPLAY").is_some() {
+    if set("DISPLAY").is_some_and(|display| x11_reachable(&display.to_string_lossy())) {
         std::env::remove_var("WAYLAND_DISPLAY");
         return true;
     }
     false
+}
+
+/// A local X11 display (":N", ":N.S", "unix:N") needs its socket; iced panics
+/// when the event loop can't open the display. Remote displays (ssh -X,
+/// "host:N") are assumed reachable.
+#[cfg(target_os = "linux")]
+fn x11_reachable(display: &str) -> bool {
+    let local = display
+        .strip_prefix("unix:")
+        .or_else(|| display.strip_prefix(':'));
+    match local.and_then(|rest| rest.split('.').next()) {
+        Some(number) if !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit()) => {
+            std::path::Path::new(&format!("/tmp/.X11-unix/X{number}")).exists()
+        }
+        _ => true,
+    }
 }
