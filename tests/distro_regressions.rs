@@ -194,3 +194,47 @@ fn forum_u2404_b18_locked_item_is_told_apart_from_no_item() {
     assert!(!search_lists_item(b""));
     assert!(!search_lists_item(b"secret-tool: No such secret item\n"));
 }
+
+// R2 N-03: on openSUSE KDE, KWallet owns org.freedesktop.secrets but declares
+// no D-Bus activation file, so dbus-broker refuses StartServiceByName and Wave
+// fell back to plaintext. Detection first asks whether the name already has an
+// owner; both gdbus and dbus-send reply formats must be understood.
+#[test]
+fn forum_r2_n03_running_secret_service_counts_without_activation() {
+    use wave_protocol::credentials::name_has_owner_reply;
+    assert!(name_has_owner_reply(b"(true,)\n"), "gdbus");
+    assert!(name_has_owner_reply(
+        b"method return time=1.2 sender=org.freedesktop.DBus -> destination=:1.9 serial=3 reply_serial=2\n   boolean true\n"
+    ), "dbus-send");
+    assert!(!name_has_owner_reply(b"(false,)\n"));
+    assert!(!name_has_owner_reply(b"   boolean false\n"));
+    assert!(!name_has_owner_reply(b""));
+    assert!(!name_has_owner_reply(
+        b"Error: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown\n"
+    ));
+}
+
+// R2 N-05: WAYLAND_DISPLAY naming a socket that doesn't exist (a stale
+// variable over SSH or after a session ended) must give the same clean
+// message, not a winit panic.
+#[cfg(target_os = "linux")]
+#[test]
+fn forum_r2_n05_gui_with_a_missing_wayland_socket_exits_cleanly() {
+    use std::process::{Command, Stdio};
+    let runtime = std::env::temp_dir().join(format!("wave-n05-{}", std::process::id()));
+    std::fs::create_dir_all(&runtime).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_wave-vpn-gui"))
+        .env_remove("WAYLAND_SOCKET")
+        .env_remove("DISPLAY")
+        .env_remove("WAVE_PREVIEW")
+        .env("WAYLAND_DISPLAY", "wayland-missing")
+        .env("XDG_RUNTIME_DIR", &runtime)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&runtime);
+    assert_eq!(output.status.code(), Some(1));
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(error.contains("display"), "{error}");
+    assert!(!error.contains("panicked"), "{error}");
+}

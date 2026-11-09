@@ -45,6 +45,13 @@ fn call(action: &str, input: Option<&[u8]>) -> Result<Zeroizing<Vec<u8>>> {
 pub const KEYRING_LOCKED: &str =
     "Your saved account is in a locked keyring. Unlock it, then choose Retry.";
 /// Whether `secret-tool search` output lists an item ("[/org/freedesktop/…]").
+/// Whether a `NameHasOwner` reply from gdbus (`(true,)`) or dbus-send
+/// (`boolean true`) says the name currently has an owner.
+pub fn name_has_owner_reply(stdout: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(stdout);
+    let text = text.trim();
+    text == "(true,)" || text.lines().any(|line| line.trim() == "boolean true")
+}
 pub fn search_lists_item(stdout: &[u8]) -> bool {
     String::from_utf8_lossy(stdout)
         .lines()
@@ -141,6 +148,41 @@ impl Storage {
     pub fn detect() -> Self {
         #[cfg(target_os = "linux")]
         if std::path::Path::new("/usr/bin/secret-tool").is_file() {
+            // A running provider counts even when it declares no D-Bus
+            // activation file (KWallet on openSUSE): dbus-broker then refuses
+            // StartServiceByName although the name already has an owner.
+            let owned = |program: &str, args: &[&str]| {
+                let mut command = std::process::Command::new(program);
+                command.args(args);
+                crate::process::output(&mut command, None, std::time::Duration::from_secs(10))
+                    .is_ok_and(|r| r.status.success() && name_has_owner_reply(&r.stdout))
+            };
+            if owned(
+                "/usr/bin/gdbus",
+                &[
+                    "call",
+                    "--session",
+                    "--dest",
+                    "org.freedesktop.DBus",
+                    "--object-path",
+                    "/org/freedesktop/DBus",
+                    "--method",
+                    "org.freedesktop.DBus.NameHasOwner",
+                    "org.freedesktop.secrets",
+                ],
+            ) || owned(
+                "/usr/bin/dbus-send",
+                &[
+                    "--session",
+                    "--print-reply",
+                    "--dest=org.freedesktop.DBus",
+                    "/org/freedesktop/DBus",
+                    "org.freedesktop.DBus.NameHasOwner",
+                    "string:org.freedesktop.secrets",
+                ],
+            ) {
+                return Self::Keyring;
+            }
             let mut command = std::process::Command::new("/usr/bin/gdbus");
             command.args([
                 "call",
