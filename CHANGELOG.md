@@ -11,6 +11,7 @@
   - A target with no available server is refused with its name and a suggestion
   - One malformed server address or WireGuard mode no longer rejects the whole server list; a list without servers or WireGuard modes is rejected so the cached one stays
   - Light theme warning, error and link text and log timestamps meet 4.5:1 contrast, matching Android
+  - Sign-in gives up after 45 seconds with a clear message instead of trying every address for minutes, and offers **Cancel** while signing in, including when restoring the saved account at startup; Cancel shows no error and keeps the saved account (same behavior as Android)
   - `scripts/check-forum.py` runs the named offline contracts and writes `target/forum/contracts.json`
 
 ## 0.1.3 · 2026-11-05 · early release

@@ -47,8 +47,14 @@ pub fn setup(app: &mut Wave) {
     }
     app.manifest = Some(m);
     app.log(Level::Info, "Preview data — no real VPN connection".into());
-    match std::env::var("WAVE_PREVIEW_SCENE").as_deref() {
-        Ok("connected") => {
+    if let Ok(name) = std::env::var("WAVE_PREVIEW_SCENE") {
+        scene(app, &name);
+    }
+}
+/// Apply one named preview scene (`WAVE_PREVIEW_SCENE`).
+pub fn scene(app: &mut Wave, name: &str) {
+    match name {
+        "connected" => {
             app.active_server = app
                 .manifest
                 .as_ref()
@@ -69,22 +75,34 @@ pub fn setup(app: &mut Wave) {
                 dns: verified,
             };
         }
-        Ok("diagnostics") => {
+        "diagnostics" => {
             app.tab = Tab::Logs;
             let _ = app.update(Message::Diagnostics);
         }
-        Ok("unknown") => {
+        "unknown" => {
             app.protection_known = false;
             app.tab = Tab::Settings;
             app.section = Section::Lock;
         }
-        Ok("logged-out") => {
+        "logged-out" => {
             app.account = None;
             app.manifest = None;
             app.tab = Tab::Settings;
         }
-        Ok("error") => {
-            app.error = Some("Connection interrupted. Network lock remains active.".into());
+        "signing-in" => {
+            app.account = None;
+            app.manifest = None;
+            app.tab = Tab::Settings;
+            app.login = "synthetic".into();
+            app.password = "preview".into();
+            app.busy = true;
+            app.sign_in = Some((
+                Instant::now() + wave_protocol::SIGN_IN_DEADLINE,
+                Arc::new(AtomicBool::new(false)),
+            ));
+        }
+        "error" => {
+            app.error = Some("Connection interrupted. Network Lock remains active.".into());
             app.guarded = true;
         }
         _ => (),

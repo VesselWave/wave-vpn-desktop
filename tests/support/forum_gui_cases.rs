@@ -328,3 +328,169 @@ fn forum_p08_state_and_secondary_text_meet_contrast_in_both_themes() {
         }
     }
 }
+
+// D-09: sign-in has a 45-second overall deadline and a visible Cancel, the
+// same on Android. Deadline: an ordinary failure with a clear message.
+// Cancel: no error, no penalty, nothing saved, the form usable again.
+fn signing_in() -> (Wave, u64, Arc<AtomicBool>) {
+    let mut app = app();
+    app.account = None;
+    app.manifest = None;
+    app.preview = false; // SignIn is disabled in preview; the request is hooked.
+    app.test_sign_ins = Some(vec![]);
+    app.login = "synthetic".into();
+    app.password = "typed-secret".into();
+    let _ = app.update(Message::SignIn);
+    assert!(app.busy, "sign-in started");
+    assert!(
+        app.sign_in_cancellable(),
+        "Cancel is offered while signing in"
+    );
+    let flag = app.test_sign_ins.as_ref().unwrap()[0].clone();
+    let epoch = app.account_epoch;
+    (app, epoch, flag)
+}
+
+fn late_login(app: &mut Wave, epoch: u64, result: Result<(Account, Manifest), String>) {
+    app.sender
+        .send(Event::Login(epoch, Box::new(result)))
+        .unwrap();
+    let _ = app.update(Message::Tick);
+}
+
+fn errors_logged(app: &Wave) -> usize {
+    app.logs.iter().filter(|l| l.level == Level::Error).count()
+}
+
+#[test]
+fn forum_d09_sign_in_deadline_settles_as_an_ordinary_failure() {
+    let (mut app, epoch, flag) = signing_in();
+    let left = app.sign_in_deadline().unwrap() - Instant::now();
+    assert!(
+        left <= wave_protocol::SIGN_IN_DEADLINE && left > Duration::from_secs(44),
+        "{left:?}"
+    );
+    let _ = app.update(Message::Tick);
+    assert!(app.busy, "nothing settles before the deadline");
+    app.expire_sign_in();
+    let _ = app.update(Message::Tick);
+    assert!(!app.busy && !app.sign_in_cancellable(), "form re-enabled");
+    assert_eq!(app.error.as_deref(), Some(wave_protocol::SIGN_IN_TIMED_OUT));
+    assert!(matches!(
+        app.last_failure,
+        wave_protocol::diagnostics::Failure::SignInNetwork
+    ));
+    assert_eq!(errors_logged(&app), 1);
+    assert!(
+        flag.load(Ordering::SeqCst),
+        "the request stops failing over"
+    );
+    assert!(app.session_password.is_empty(), "no session secret kept");
+    // A response arriving after the deadline is discarded, never adopted.
+    let m = app_with_manifest();
+    late_login(&mut app, epoch, Ok((account(&["test"]), m)));
+    assert!(app.account.is_none() && app.manifest.is_none());
+    assert!(!app.keyring_busy, "nothing is saved");
+    // Retry works.
+    app.password = "typed-secret".into();
+    let _ = app.update(Message::SignIn);
+    assert!(app.busy && app.error.is_none());
+}
+
+fn app_with_manifest() -> Manifest {
+    app().manifest.take().unwrap()
+}
+
+#[test]
+fn forum_d09_user_cancel_settles_without_failure_or_penalty() {
+    let (mut app, epoch, flag) = signing_in();
+    app.last_failure = wave_protocol::diagnostics::Failure::Export;
+    let _ = app.update(Message::CancelSignIn);
+    assert!(!app.busy && !app.sign_in_cancellable(), "form re-enabled");
+    assert!(app.error.is_none(), "cancel is not reported as a failure");
+    assert!(matches!(
+        app.last_failure,
+        wave_protocol::diagnostics::Failure::Export
+    ));
+    assert_eq!(errors_logged(&app), 0);
+    assert!(app.penalties.is_empty());
+    assert!(
+        flag.load(Ordering::SeqCst),
+        "the request stops failing over"
+    );
+    assert!(app.sign_in_deadline().is_none(), "no deadline fires later");
+    assert!(app.session_password.is_empty(), "no session secret kept");
+    assert_eq!(
+        app.password, "typed-secret",
+        "the form keeps what was typed"
+    );
+    assert_eq!(app.login, "synthetic");
+    // Late results of the cancelled attempt change nothing.
+    late_login(
+        &mut app,
+        epoch,
+        Err("No AirVPN bootstrap server returned a valid response".into()),
+    );
+    assert!(app.error.is_none());
+    late_login(
+        &mut app,
+        epoch,
+        Ok((account(&["test"]), app_with_manifest())),
+    );
+    assert!(app.account.is_none() && !app.keyring_busy);
+    // Sign in again straight away.
+    let _ = app.update(Message::SignIn);
+    assert!(app.busy);
+}
+
+#[test]
+fn forum_d09_cancel_during_startup_restore_keeps_the_saved_account() {
+    let mut app = app();
+    app.account = None;
+    app.manifest = None;
+    app.preview = false;
+    app.test_sign_ins = Some(vec![]);
+    app.keyring_busy = true; // boot() is loading the saved account.
+    let storage = wave_protocol::credentials::Storage::Plaintext;
+    app.sender
+        .send(Event::StorageLoaded(
+            app.account_epoch,
+            storage,
+            Ok(Some(wave_protocol::credentials::Credentials {
+                login: "synthetic".into(),
+                password: "stored-secret".into(),
+            })),
+        ))
+        .unwrap();
+    let _ = app.update(Message::Tick);
+    assert!(app.busy && app.sign_in_cancellable(), "restore signs in");
+    let epoch = app.account_epoch;
+    let _ = app.update(Message::CancelSignIn);
+    assert!(!app.busy && app.error.is_none());
+    assert_eq!(
+        app.storage,
+        Some(storage),
+        "the saved account is not forgotten"
+    );
+    assert!(!app.keyring_busy, "no keyring write or delete");
+    assert_eq!(app.login, "synthetic");
+    assert_eq!(
+        app.password, "stored-secret",
+        "Sign in retries without retyping"
+    );
+    late_login(
+        &mut app,
+        epoch,
+        Ok((account(&["test"]), app_with_manifest())),
+    );
+    assert!(app.account.is_none());
+}
+
+// The error banner uses the app's "Network Lock" name, as everywhere else.
+#[test]
+fn forum_copy_error_banner_capitalizes_network_lock() {
+    let mut app = app();
+    preview::scene(&mut app, "error");
+    let error = app.error.take().unwrap();
+    assert!(error.contains("Network Lock remains active"), "{error}");
+}

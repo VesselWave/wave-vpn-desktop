@@ -79,6 +79,8 @@ enum Message {
     Login(String),
     Password(String),
     SignIn,
+    /// Stop a sign-in in progress: not a failure, nothing is saved.
+    CancelSignIn,
     ImportPath(String),
     ImportPassword(String),
     ImportEddie,
@@ -198,6 +200,8 @@ struct Wave {
     lock_change: Option<bool>,
     session_password: String,
     busy: bool,
+    /// The sign-in in progress: its overall deadline and its own Cancel flag.
+    sign_in: Option<(Instant, Arc<AtomicBool>)>,
     refresh: RefreshSchedule,
     /// When the account document (devices, subscription) was last fetched.
     account_checked: Instant,
@@ -259,6 +263,9 @@ struct Wave {
     test_helper: Option<bool>,
     #[cfg(test)]
     test_privileged: Vec<(&'static str, wave_protocol::transport::LockInput)>,
+    /// Tests: record each sign-in's Cancel flag instead of starting a request.
+    #[cfg(test)]
+    test_sign_ins: Option<Vec<Arc<AtomicBool>>>,
 }
 impl Wave {
     fn new() -> Self {
@@ -299,6 +306,7 @@ impl Wave {
             lock_change: None,
             session_password: String::new(),
             busy: false,
+            sign_in: None,
             refresh: RefreshSchedule::new(Instant::now()),
             account_checked: Instant::now(),
             requests_cancel: Arc::new(AtomicBool::new(false)),
@@ -349,6 +357,8 @@ impl Wave {
             test_helper: None,
             #[cfg(test)]
             test_privileged: vec![],
+            #[cfg(test)]
+            test_sign_ins: None,
         };
         if app.preview {
             preview::setup(&mut app);
@@ -498,6 +508,13 @@ impl Wave {
     fn update(&mut self, msg: Message) -> Task<Message> {
         match msg {
             Message::Tick => {
+                if self
+                    .sign_in
+                    .as_ref()
+                    .is_some_and(|(deadline, _)| Instant::now() >= *deadline)
+                {
+                    self.settle_sign_in(true);
+                }
                 while let Ok(e) = self.events.try_recv() {
                     match e {
                         Event::DiagnosticsSaved(result) => match result {
@@ -565,6 +582,7 @@ impl Wave {
                                 continue;
                             }
                             self.busy = false;
+                            self.sign_in = None;
                             match *result {
                                 Ok((a, m)) => {
                                     let first = self.account.is_none();
@@ -696,6 +714,9 @@ impl Wave {
                                 Ok(()) => {
                                     self.account_epoch = self.account_epoch.wrapping_add(1);
                                     self.busy = false;
+                                    if let Some((_, flag)) = self.sign_in.take() {
+                                        wave_protocol::cancel_requests(&flag);
+                                    }
                                     // Fenced: no request of this session can still
                                     // write bootstrap state once this returns.
                                     wave_protocol::cancel_requests(&self.requests_cancel);
@@ -958,6 +979,17 @@ impl Wave {
                 let tx = self.sender.clone();
                 let timeout = self.prefs.options.number("http_timeout");
                 let cancel = self.requests_cancel.clone();
+                let own = Arc::new(AtomicBool::new(false));
+                self.sign_in = Some((
+                    Instant::now() + wave_protocol::SIGN_IN_DEADLINE,
+                    own.clone(),
+                ));
+                #[cfg(test)]
+                if let Some(started) = &mut self.test_sign_ins {
+                    started.push(own);
+                    password.zeroize();
+                    return Task::none();
+                }
                 let store = self.bootstrap.clone();
                 let pins = self.pins_required();
                 std::thread::spawn(move || {
@@ -965,6 +997,7 @@ impl Wave {
                         .map(|c| {
                             c.remembering(store)
                                 .cancellable(cancel)
+                                .cancellable(own)
                                 .requiring_pins(pins)
                         })
                         .and_then(|c| c.login(&login, &password))
@@ -973,6 +1006,7 @@ impl Wave {
                     let _ = tx.send(Event::Login(epoch, Box::new(r)));
                 });
             }
+            Message::CancelSignIn => self.settle_sign_in(false),
             Message::SignOut if self.control.is_none() && !self.keyring_busy && !self.preview => {
                 if let Some(storage) = self.storage {
                     self.keyring_busy = true;
@@ -1672,6 +1706,47 @@ impl Wave {
             self.prefs.last_server = s.name.clone();
         }
         self.persist();
+    }
+    /// Cancel is offered only once the request runs, not while the keyring
+    /// is still loading the saved account.
+    fn sign_in_cancellable(&self) -> bool {
+        self.busy && self.sign_in.is_some()
+    }
+    #[cfg(test)]
+    fn sign_in_deadline(&self) -> Option<Instant> {
+        self.sign_in.as_ref().map(|(deadline, _)| *deadline)
+    }
+    #[cfg(test)]
+    fn expire_sign_in(&mut self) {
+        if let Some((deadline, _)) = &mut self.sign_in {
+            *deadline = Instant::now();
+        }
+    }
+    /// Settle the sign-in in progress (same rules as Android). Its request
+    /// stops failing over and can no longer store bootstrap data; a late
+    /// result is discarded. The deadline is an ordinary sign-in failure. A
+    /// user Cancel is not a failure: no error, nothing saved, and the form
+    /// keeps the typed password for an immediate retry.
+    fn settle_sign_in(&mut self, timed_out: bool) {
+        let Some((_, flag)) = self.sign_in.take() else {
+            return;
+        };
+        wave_protocol::cancel_requests(&flag);
+        self.account_epoch = self.account_epoch.wrapping_add(1);
+        self.busy = false;
+        if timed_out {
+            self.last_failure = wave_protocol::diagnostics::Failure::SignInNetwork;
+            self.error = Some(wave_protocol::SIGN_IN_TIMED_OUT.into());
+            self.log(Level::Error, wave_protocol::SIGN_IN_TIMED_OUT.into());
+        } else {
+            if self.password.is_empty() {
+                std::mem::swap(&mut self.password, &mut self.session_password);
+            }
+            self.log(Level::Info, "Sign-in cancelled".into());
+        }
+        if self.account.is_none() {
+            self.session_password.zeroize();
+        }
     }
     fn save_account(&mut self) {
         let Some(storage) = self.storage else {

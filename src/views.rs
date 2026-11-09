@@ -1035,13 +1035,7 @@ fn settings(app: &Wave) -> Element<'_, Message> {
                         .padding(8)
                         .style(theme::input)
                         .on_submit(Message::SignIn),
-                    button(if app.busy || app.keyring_busy {
-                        "Signing in…"
-                    } else {
-                        "Sign in"
-                    })
-                    .on_press_maybe((!app.busy && !app.keyring_busy).then_some(Message::SignIn))
-                    .style(theme::primary)
+                    sign_in_actions(app)
                 ]
                 .spacing(8)
                 .padding(16)
@@ -1242,6 +1236,24 @@ fn diagnostics(app: &Wave) -> Element<'_, Message> {
         text_input("New report filename", &app.diagnostics_path).on_input(Message::DiagnosticsPath).size(13),
         row![link("Copy report", Message::DiagnosticsCopy), link("Save report", Message::DiagnosticsSave)].spacing(12),
     ].spacing(12).height(Fill).into()
+}
+
+/// "Sign in", or "Signing in…" with Cancel once the request runs (as on Android).
+fn sign_in_actions(app: &Wave) -> Element<'_, Message> {
+    let busy = app.busy || app.keyring_busy;
+    let mut actions = row![button(if busy { "Signing in…" } else { "Sign in" })
+        .on_press_maybe((!busy).then_some(Message::SignIn))
+        .style(theme::primary)]
+    .spacing(8)
+    .align_y(Alignment::Center);
+    if app.sign_in_cancellable() {
+        actions = actions.push(
+            button("Cancel")
+                .on_press(Message::CancelSignIn)
+                .style(theme::ghost),
+        );
+    }
+    actions.into()
 }
 
 /// The active Network Lock bootstrap exceptions, stated without overclaiming:

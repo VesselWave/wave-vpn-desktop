@@ -117,6 +117,12 @@ pub fn cancel(flag: &AtomicBool) {
     flag.store(true, Ordering::SeqCst);
 }
 
+/// Overall sign-in deadline across every endpoint and bootstrap attempt.
+/// The same value and message as the Android app.
+pub const SIGN_IN_DEADLINE: Duration = Duration::from_secs(45);
+pub const SIGN_IN_TIMED_OUT: &str =
+    "Sign-in timed out after 45 seconds. Check your network and retry shortly.";
+
 type Pause = Box<dyn Fn(Duration) + Send + Sync>;
 type Lookup = Box<dyn Fn(&str) -> Option<Vec<IpAddr>> + Send + Sync>;
 
@@ -129,7 +135,7 @@ pub struct Client<T: Transport = Http> {
     /// only addresses a hostname may be pinned to.
     pin_source: Option<Bootstrap>,
     require_pins: bool,
-    cancel: Option<Arc<AtomicBool>>,
+    cancel: Vec<Arc<AtomicBool>>,
     pause: Pause,
     lookup: Lookup,
 }
@@ -150,7 +156,7 @@ impl<T: Transport> Client<T> {
             resolved: bootstrap::Resolved::new(),
             pin_source: None,
             require_pins: false,
-            cancel: None,
+            cancel: Vec::new(),
             pause: Box::new(std::thread::sleep),
             lookup: Box::new(bootstrap::system_lookup),
         }
@@ -180,9 +186,10 @@ impl<T: Transport> Client<T> {
         self.require_pins = require;
         self
     }
-    /// Stop between failover attempts once the flag is set.
+    /// Stop between failover attempts once the flag is set. Repeatable: a
+    /// sign-in also carries its own Cancel/deadline flag; any one stops it.
     pub fn cancellable(mut self, flag: Arc<AtomicBool>) -> Self {
-        self.cancel = Some(flag);
+        self.cancel.push(flag);
         self
     }
     /// Replace the failover pause; tests record it instead of sleeping.
@@ -194,9 +201,7 @@ impl<T: Transport> Client<T> {
         &self.configurations
     }
     fn cancelled(&self) -> bool {
-        self.cancel
-            .as_ref()
-            .is_some_and(|c| c.load(Ordering::SeqCst))
+        self.cancel.iter().any(|c| c.load(Ordering::SeqCst))
     }
     pub fn request(&self, action: &str, login: &str, password: &str) -> Result<String> {
         anyhow::ensure!(

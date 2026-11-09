@@ -35,6 +35,11 @@ REQUIRED = (
     'forum_d06_declined_administrator_prompt_is_explained',
     'forum_d06_missing_pkexec_is_explained',
     'forum_d07_target_matching_no_server_is_refused_with_its_name',
+    'forum_d09_sign_in_deadline_settles_as_an_ordinary_failure',
+    'forum_d09_user_cancel_settles_without_failure_or_penalty',
+    'forum_d09_cancel_during_startup_restore_keeps_the_saved_account',
+    'forum_d09_sign_in_cancel_stops_failover_alongside_the_session_flag',
+    'forum_d09_sign_in_deadline_is_45_seconds_with_shared_copy',
     'forum_p08_state_and_secondary_text_meet_contrast_in_both_themes',
     'forum_p09_device_choice_is_hidden_for_a_single_device_account',
     'forum_d10_one_malformed_server_address_keeps_the_other_servers',
@@ -42,6 +47,7 @@ REQUIRED = (
     'forum_d11_manifest_without_servers_is_rejected_so_the_cache_survives',
     'forum_d11_manifest_without_wireguard_modes_is_rejected',
     'forum_d11_malformed_wireguard_mode_is_skipped_not_fatal',
+    'forum_copy_error_banner_capitalizes_network_lock',
 )
 RESULT = re.compile(r'^test (\S+) \.\.\. (ok|FAILED|ignored)\b')
 STATUS = {'ok': 'passed', 'FAILED': 'failed', 'ignored': 'skipped'}

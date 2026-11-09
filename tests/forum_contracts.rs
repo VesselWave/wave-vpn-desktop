@@ -124,3 +124,63 @@ fn forum_d06_missing_pkexec_is_explained() {
     let present = tempfile::NamedTempFile::new().unwrap();
     assert!(wave_protocol::service::authorization_available(present.path()).is_ok());
 }
+
+/// Every POST fails; counts attempts and sets `flag` after the first.
+struct Down {
+    calls: std::sync::Mutex<usize>,
+    flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+impl wave_protocol::Transport for Down {
+    fn post(
+        &self,
+        _: &reqwest::Url,
+        _: &std::collections::BTreeMap<String, String>,
+    ) -> anyhow::Result<Vec<u8>> {
+        *self.calls.lock().unwrap() += 1;
+        self.flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        anyhow::bail!("blackholed")
+    }
+}
+
+#[test]
+fn forum_d09_sign_in_cancel_stops_failover_alongside_the_session_flag() {
+    use std::sync::{atomic::AtomicBool, Arc};
+    // A sign-in carries the session's sign-out flag and its own Cancel /
+    // deadline flag; either one stops failover, so a cancelled or timed-out
+    // sign-in (or a sign-out) launches no further endpoint attempt.
+    for which in ["session", "own"] {
+        let session = Arc::new(AtomicBool::new(false));
+        let own = Arc::new(AtomicBool::new(false));
+        let down = Arc::new(Down {
+            calls: Default::default(),
+            flag: if which == "session" {
+                session.clone()
+            } else {
+                own.clone()
+            },
+        });
+        let Err(error) = wave_protocol::Client::with_transport(down.clone())
+            .cancellable(session)
+            .cancellable(own)
+            .pausing(|_| ())
+            .login("synthetic", "synthetic")
+        else {
+            panic!("a blackholed sign-in cannot succeed");
+        };
+        assert!(error.is::<wave_protocol::Cancelled>(), "{which}: {error}");
+        assert_eq!(*down.calls.lock().unwrap(), 1, "{which}");
+    }
+}
+
+#[test]
+fn forum_d09_sign_in_deadline_is_45_seconds_with_shared_copy() {
+    assert_eq!(
+        wave_protocol::SIGN_IN_DEADLINE,
+        std::time::Duration::from_secs(45)
+    );
+    // Identical on Android (AppViewModel.SIGN_IN_TIMED_OUT).
+    assert_eq!(
+        wave_protocol::SIGN_IN_TIMED_OUT,
+        "Sign-in timed out after 45 seconds. Check your network and retry shortly."
+    );
+}

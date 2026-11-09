@@ -30,7 +30,7 @@ Date: 2026-11-08. Code at local `main` after the parity fix commit. Line numbers
 | D-06 | Helper missing, declined, other user, outdated, no pkexec | offline, VM GUI | fix-now | **fixed + test** |
 | D-07 | Target with no available server; empty Favorites/search | offline, VM GUI | document | **fixed + test** (message) |
 | D-08 | Package upgrade while connected leaves an old helper | VM | fix-now | needs VM |
-| D-09 | Sign-in has no overall deadline and no Cancel | offline, VM | fix-now (needs a decision) | doc only |
+| D-09 | Sign-in had no overall deadline and no Cancel | offline, VM | fix-now (decided: 45 s + Cancel, both apps) | **fixed + test** |
 | D-10 | One malformed server address rejected the whole manifest | offline | fix-now | **fixed + test** |
 | D-11 | A manifest without servers or WireGuard modes replaced the cache | offline | fix-now | **fixed + test** |
 | D-12 | Plain resolv.conf + NetworkManager rewrites: leak or Recover loop | namespace, VM | blocker off Ubuntu | needs VM |
@@ -49,7 +49,7 @@ Date: 2026-11-08. Code at local `main` after the parity fix commit. Line numbers
 2. **Network Lock drops SSH replies and all `tailscale0` traffic.** Drive lock tests from the VM console (virt-manager or Lima's VNC), not over SSH or Tailscale. Turning on **LAN access** keeps LAN SSH working, but not Tailscale (`100.64.0.0/10` is not LAN).
 3. Install the candidate build: `sudo apt install ./wave-vpn_<version>_amd64.deb` (or `arm64`). Expect `libsecret-tools`, `wireguard-tools`, `nftables` and `pkexec` to be pulled in. Record `wave-vpn --version` or the About row.
 4. Evidence to attach to every report: the GUI **Support report** (Logs → Support report → Save), `sudo nft list table inet wave_vpn`, `ip -4 rule; ip -6 rule`, `ip route show table 51820`, `resolvectl status`, `ls -l /etc/resolv.conf`, `journalctl -u wave-vpn-service -b --no-pager | tail -100`, and a screenshot. Never attach credentials, `/etc/wave-vpn/*` or `/run/wave-vpn/*` contents.
-5. Contract check before VM work: `python3 scripts/check-forum.py` must report 20 passed, exit 0.
+5. Contract check before VM work: `python3 scripts/check-forum.py` must report 26 passed, exit 0.
 
 ---
 
@@ -130,13 +130,17 @@ Date: 2026-11-08. Code at local `main` after the parity fix commit. Line numbers
 - **Expected fix:** refresh or flag the helper on the next idle Connect when it differs from the app binary.
 - **Layer / priority:** VM / fix-now.
 
-## D-09 Sign-in has no overall deadline and no Cancel
+## D-09 Sign-in deadline and Cancel — fixed
 
 - **Source:** staff comment 268266 item 1 (Android Connect stuck behind a request deadline); code inspection.
-- **Code area:** `Client::request` (`src/client.rs:201`) tries every distinct address, 6 embedded plus up to 16 from the latest manifest, each bounded by `http_timeout` (10 s) with 0.25–2 s pauses. Sign-in shows "Signing in…" with the button disabled (`src/views.rs`, Settings → Account) and no Cancel. Connect is unaffected once signed in, but after a restart there is no cached account, by design, so Connect needs this sign-in.
-- **Repro:** sign out. On the VM, blackhole the bootstrap addresses: `sudo nft add table inet t; sudo nft add chain inet t o '{ type filter hook output priority 0; }'; sudo nft add rule inet t o tcp dport 80 drop`. Sign in and time until the error appears. Clean up with `sudo nft delete table inet t`.
-- **Expected:** record the duration. More than about 60 s needs a decision: an overall deadline or a Cancel.
-- **Layer / priority:** offline-measurable, VM / fix-now (needs a decision).
+- **Was:** `Client::request` (`src/client.rs`) tries every distinct address, 6 embedded plus up to 16 from the latest manifest, each bounded by `http_timeout` (10 s) with 0.25–2 s pauses, for both the account and the server-list request. Sign-in showed "Signing in…" with no Cancel for up to about 2–4 minutes. Android 0.1.5 had neither a deadline nor a Cancel either (3 endpoints per request, 8 s connect + 8 s read).
+- **Decision (maintainer):** the same behavior in both apps: one 45-second overall deadline covering all endpoint and bootstrap attempts of a sign-in, and a visible **Cancel** while signing in.
+- **Fix:** `SIGN_IN_DEADLINE` / `SIGN_IN_TIMED_OUT` (`src/client.rs`). Each sign-in, from the form or restoring the saved account at startup, carries its own Cancel flag next to the sign-out flag (`Client::cancellable` is repeatable), so a settled sign-in starts no further endpoint attempt and cannot store bootstrap data; a late response is discarded. `Wave::settle_sign_in` (`src/gui.rs`):
+  - **Deadline:** an ordinary sign-in failure: "Sign-in timed out after 45 seconds. Check your network and retry shortly." (same text on Android), Error log, diagnostics category `sign_in_network`, form re-enabled. Linux keeps no per-endpoint penalty memory for sign-in, so there is nothing further to back off.
+  - **Cancel:** no error, Info log "Sign-in cancelled", diagnostics unchanged, no server or endpoint penalty, nothing saved, the saved account is not forgotten, and the form keeps the typed or restored password so **Sign in** retries immediately.
+  - Cancel appears next to "Signing in…" once the request runs, not while the keyring is still loading. Recover makes no account requests, so it is unaffected. Background refreshes keep their own backoff (P-01).
+- **Contracts:** `forum_d09_sign_in_deadline_settles_as_an_ordinary_failure`, `forum_d09_user_cancel_settles_without_failure_or_penalty`, `forum_d09_cancel_during_startup_restore_keeps_the_saved_account`, `forum_d09_sign_in_cancel_stops_failover_alongside_the_session_flag`, `forum_d09_sign_in_deadline_is_45_seconds_with_shared_copy`. Preview: `WAVE_PREVIEW=1 WAVE_PREVIEW_SCENE=signing-in`.
+- **VM check (optional):** sign out, blackhole the bootstrap addresses (`sudo nft add table inet t; sudo nft add chain inet t o '{ type filter hook output priority 0; }'; sudo nft add rule inet t o tcp dport 80 drop`), sign in: the error appears after 45 s; repeat and press Cancel: the form returns at once with no error. Clean up with `sudo nft delete table inet t`.
 
 ## D-10 Malformed server address — fixed
 
