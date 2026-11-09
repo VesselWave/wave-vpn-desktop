@@ -1,0 +1,1181 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""Drive disposable Proxmox VE desktop test guests from a workstation.
+
+All site details (host, storage, VM ID range, keys, passwords, proxies) come
+from a private JSON configuration that never belongs in Git. See README.md.
+"""
+import argparse
+import base64
+import datetime
+import hashlib
+import json
+import os
+import re
+import shlex
+import struct
+import subprocess
+import sys
+import tarfile
+import tempfile
+import time
+import zlib
+from pathlib import Path
+
+LAB_DIR = Path(__file__).resolve().parent
+NAME_RE = re.compile(r'^[a-z0-9][a-z0-9-]{0,48}$')
+# ssh exits 255 for its own failures. Only these mean the remote command never ran.
+SSH_NEVER_CONNECTED = re.compile(
+    r'ssh: connect to host .* port \d+: |Connection timed out during banner exchange|'
+    r'kex_exchange_identification|Could not resolve hostname|Host key verification failed|'
+    r'REMOTE HOST IDENTIFICATION HAS CHANGED|No route to host|Network is unreachable|'
+    r'Permission denied \(publickey')
+SSH_HOSTKEY_PROBLEM = re.compile(r'Host key verification failed|REMOTE HOST IDENTIFICATION HAS CHANGED')
+ABS_MAX = 0x7FFF
+
+
+class LabError(Exception):
+    pass
+
+
+# --------------------------------------------------------------------------- config
+
+def find_config(explicit=None):
+    candidates = []
+    if explicit:
+        candidates.append(Path(explicit))
+    elif os.environ.get('WAVE_LAB_CONFIG'):
+        candidates.append(Path(os.environ['WAVE_LAB_CONFIG']))
+    else:
+        for start in (Path.cwd(), LAB_DIR):
+            for parent in [start] + list(start.parents):
+                candidates.append(parent / '.lab' / 'config.json')
+    for path in candidates:
+        if path.is_file():
+            return path.resolve()
+    raise LabError('no lab configuration found; set WAVE_LAB_CONFIG or create .lab/config.json '
+                   'in a parent directory outside Git (see lab/README.md)')
+
+
+class Config:
+    DEFAULTS = {
+        'clone_vmid_min': None, 'tag': 'wave-lab',
+        'name_prefix': 'wave-', 'max_running': 3, 'guest_user': 'wave-lab', 'storage': 'local',
+        'bridge': 'vmbr0', 'memory_mb': 4096, 'cores': 2, 'ssh_jump': None, 'apt_proxy': None,
+        'image_dir': '/var/lib/vz/template/wave-lab', 'password_file': None, 'builder': {},
+        'node': 'localhost',
+    }
+
+    def __init__(self, path):
+        self.path = Path(path)
+        self.dir = self.path.parent
+        data = json.loads(self.path.read_text())
+        missing = [k for k in ('host', 'ssh_key', 'vmid_min', 'vmid_max') if k not in data]
+        if missing:
+            raise LabError('configuration needs %s' % ', '.join(missing))
+        self.data = dict(self.DEFAULTS)
+        self.data.update(data)
+        if self.data['clone_vmid_min'] is None:
+            self.data['clone_vmid_min'] = self.data['vmid_min']
+
+    def __getattr__(self, key):
+        try:
+            return self.data[key]
+        except KeyError:
+            raise AttributeError(key)
+
+    def private(self, rel):
+        path = Path(rel).expanduser()
+        return path if path.is_absolute() else self.dir / path
+
+    @property
+    def state_dir(self):
+        path = self.dir / 'state'
+        path.mkdir(mode=0o700, exist_ok=True)
+        return path
+
+    def password(self):
+        if not self.data.get('password_file'):
+            raise LabError('configuration has no password_file')
+        return self.private(self.password_file).read_text().strip()
+
+
+# --------------------------------------------------------------------------- helpers
+
+def helper_source():
+    return (LAB_DIR / 'labhelper.py').read_bytes()
+
+
+def helper_command(op, *args):
+    packed = base64.b64encode(zlib.compress(helper_source(), 9)).decode()
+    code = 'import base64,zlib;exec(zlib.decompress(base64.b64decode("%s")))' % packed
+    return 'python3 -c %s %s' % (shlex.quote(code), ' '.join(shlex.quote(str(a)) for a in (op,) + args))
+
+
+def ppm_to_png(data):
+    """Convert a binary PPM (P6, maxval 255) to PNG using only the stdlib."""
+    tokens = []
+    pos = 2
+    if not data.startswith(b'P6'):
+        raise LabError('screendump returned neither PNG nor P6 PPM')
+    while len(tokens) < 3:
+        while data[pos:pos + 1].isspace():
+            pos += 1
+        if data[pos:pos + 1] == b'#':
+            pos = data.index(b'\n', pos) + 1
+            continue
+        end = pos
+        while not data[end:end + 1].isspace():
+            end += 1
+        tokens.append(int(data[pos:end]))
+        pos = end
+    pos += 1
+    width, height, maxval = tokens
+    if maxval != 255:
+        raise LabError('unsupported PPM maxval %d' % maxval)
+    stride = width * 3
+    pixels = data[pos:pos + stride * height]
+    raw = b''.join(b'\x00' + pixels[y * stride:(y + 1) * stride] for y in range(height))
+
+    def chunk(kind, body):
+        return struct.pack('>I', len(body)) + kind + body + struct.pack('>I', zlib.crc32(kind + body) & 0xFFFFFFFF)
+
+    return (b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', width, height, 8, 2, 0, 0, 0))
+            + chunk(b'IDAT', zlib.compress(raw, 6)) + chunk(b'IEND', b''))
+
+
+def image_size(data):
+    if data.startswith(b'\x89PNG'):
+        return struct.unpack('>II', data[16:24])
+    if data.startswith(b'P6'):
+        fields = re.match(rb'P6\s+(?:#[^\n]*\n\s*)*(\d+)\s+(\d+)', data)
+        return int(fields.group(1)), int(fields.group(2))
+    raise LabError('unknown screendump format')
+
+
+def to_abs(value, size):
+    if not 0 <= value < size:
+        raise LabError('coordinate %d outside screen size %d' % (value, size))
+    return int(round(value * ABS_MAX / max(size - 1, 1)))
+
+
+KEY_ALIASES = {
+    'enter': 'ret', 'return': 'ret', 'escape': 'esc', 'space': 'spc', 'super': 'meta_l', 'win': 'meta_l',
+    'meta': 'meta_l', 'control': 'ctrl', 'del': 'delete', 'bksp': 'backspace', 'pageup': 'pgup',
+    'pagedown': 'pgdn', 'altgr': 'alt_r', 'ins': 'insert',
+}
+CHAR_KEYS = {' ': ('spc', False), '\n': ('ret', False), '\t': ('tab', False)}
+for _plain, _shifted, _code in [('-', '_', 'minus'), ('=', '+', 'equal'), ('[', '{', 'bracket_left'),
+                                (']', '}', 'bracket_right'), ('\\', '|', 'backslash'), (';', ':', 'semicolon'),
+                                ("'", '"', 'apostrophe'), ('`', '~', 'grave_accent'), (',', '<', 'comma'),
+                                ('.', '>', 'dot'), ('/', '?', 'slash')]:
+    CHAR_KEYS[_plain] = (_code, False)
+    CHAR_KEYS[_shifted] = (_code, True)
+for _digit, _shifted in zip('1234567890', '!@#$%^&*()'):
+    CHAR_KEYS[_digit] = (_digit, False)
+    CHAR_KEYS[_shifted] = (_digit, True)
+for _letter in 'abcdefghijklmnopqrstuvwxyz':
+    CHAR_KEYS[_letter] = (_letter, False)
+    CHAR_KEYS[_letter.upper()] = (_letter, True)
+
+
+def combo_keys(combo):
+    """'ctrl-alt-t' -> QMP key list. A lone '-' or '+' is the key itself."""
+    parts = [combo] if combo in ('-', '+') else re.split(r'(?<!^)[-+](?!$)', combo)
+    keys = []
+    for part in parts:
+        name = KEY_ALIASES.get(part.lower(), part.lower())
+        if len(part) == 1 and part in CHAR_KEYS:
+            name = CHAR_KEYS[part][0]
+        keys.append({'type': 'qcode', 'data': name})
+    return keys
+
+
+def type_commands(text, delay=0.03):
+    commands = []
+    for char in text:
+        if char not in CHAR_KEYS:
+            raise LabError('cannot type %r with a US keyboard map' % char)
+        code, shift = CHAR_KEYS[char]
+        keys = ([{'type': 'qcode', 'data': 'shift'}] if shift else []) + [{'type': 'qcode', 'data': code}]
+        commands.append({'execute': 'send-key', 'arguments': {'keys': keys, 'hold-time': 30}})
+        commands.append({'execute': 'sleep', 'seconds': delay})
+    return commands
+
+
+def has_tag(vm, tag):
+    return tag in re.split(r'[;, ]+', vm.get('tags') or '')
+
+
+# --------------------------------------------------------------------------- lab
+
+class Lab:
+    def __init__(self, cfg, verbose=False, quiet=False):
+        self.cfg = cfg
+        self.verbose = verbose
+        self.quiet = quiet
+
+    def note(self, message):
+        if not self.quiet:
+            sys.stderr.write('[labctl] %s\n' % message)
+
+    # host ----------------------------------------------------------------
+    def host(self, command, input=None, timeout=None, check=True):
+        args = ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'ServerAliveInterval=15',
+                self.cfg.host, command]
+        if self.verbose:
+            sys.stderr.write('[host] %s\n' % (command if len(command) < 300 else command[:120] + ' ...'))
+        try:
+            proc = subprocess.run(args, input=input, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                  stdin=None if input is not None else subprocess.DEVNULL, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            raise LabError('host command timed out: %s' % command[:120])
+        if check and proc.returncode != 0:
+            raise LabError('host command failed (%d): %s\n%s' % (
+                proc.returncode, command[:200], proc.stderr.decode(errors='replace').strip()))
+        return proc
+
+    def host_text(self, command, **kw):
+        return self.host(command, **kw).stdout.decode(errors='replace')
+
+    def qm(self, *args, **kw):
+        return self.host_text('qm ' + ' '.join(shlex.quote(str(a)) for a in args), **kw)
+
+    def helper(self, op, vmid, *args, input=None, timeout=120, check=True):
+        return self.host(helper_command(op, vmid, *args), input=input, timeout=timeout, check=check)
+
+    def helper_json(self, op, vmid, *args, **kw):
+        return json.loads(self.helper(op, vmid, *args, **kw).stdout.decode())
+
+    # inventory -----------------------------------------------------------
+    def resources(self):
+        # Live per-node lists; /cluster/resources lags behind new clones by seconds.
+        found = []
+        for kind in ('qemu', 'lxc'):
+            for vm in json.loads(self.host_text('pvesh get /nodes/%s/%s --output-format json' % (
+                    self.cfg.node, kind))):
+                vm['type'] = kind
+                vm['vmid'] = int(vm['vmid'])
+                found.append(vm)
+        return found
+
+    def in_range(self, vmid):
+        return self.cfg.vmid_min <= int(vmid) <= self.cfg.vmid_max
+
+    def lab_vms(self):
+        return sorted((vm for vm in self.resources() if vm.get('type') == 'qemu' and self.in_range(vm['vmid'])
+                       and has_tag(vm, self.cfg.tag)), key=lambda vm: vm['vmid'])
+
+    def resolve(self, ref):
+        matches = [vm for vm in self.resources() if vm.get('type') == 'qemu'
+                   and (str(vm['vmid']) == str(ref) or vm.get('name') == ref)]
+        if not matches:
+            raise LabError('no VM named %s' % ref)
+        if len(matches) > 1:
+            raise LabError('%s is ambiguous; use the VM ID' % ref)
+        vm = matches[0]
+        if not (self.in_range(vm['vmid']) and has_tag(vm, self.cfg.tag)
+                and vm.get('name', '').startswith(self.cfg.name_prefix)):
+            raise LabError('refusing to touch VM %s: not a %s-tagged %s* VM in %d-%d' % (
+                vm['vmid'], self.cfg.tag, self.cfg.name_prefix, self.cfg.vmid_min, self.cfg.vmid_max))
+        return vm
+
+    def status(self, vmid):
+        out = self.qm('status', vmid)
+        return out.split(':', 1)[1].strip() if ':' in out else out.strip()
+
+    def free_vmid(self, low=None):
+        used = {int(vm['vmid']) for vm in self.resources()}
+        for vmid in range(low or self.cfg.clone_vmid_min, self.cfg.vmid_max + 1):
+            if vmid not in used:
+                return vmid
+        raise LabError('no free VM ID in range')
+
+    def check_name(self, name):
+        if not (name.startswith(self.cfg.name_prefix) and NAME_RE.match(name)):
+            raise LabError('name must start with %s and use a-z, 0-9 and -' % self.cfg.name_prefix)
+        if any(vm.get('name') == name for vm in self.resources()):
+            raise LabError('a VM named %s already exists' % name)
+
+    def running_lab_vms(self, exclude=None):
+        return [vm for vm in self.lab_vms() if vm.get('status') == 'running' and vm['vmid'] != exclude]
+
+    # lifecycle -----------------------------------------------------------
+    def start(self, vm, force=False):
+        if vm.get('template'):
+            raise LabError('%s is a template; clone it first' % vm['name'])
+        if self.status(vm['vmid']) == 'running':
+            return
+        running = self.running_lab_vms(exclude=vm['vmid'])
+        if len(running) >= self.cfg.max_running and not force:
+            raise LabError('%d lab VMs already running (%s); limit is %d. Stop one or pass --force.' % (
+                len(running), ', '.join(v['name'] for v in running), self.cfg.max_running))
+        self.forget(vm['vmid'])
+        self.qm('start', vm['vmid'], timeout=180)
+
+    def stop(self, vm, hard=False, timeout=90):
+        if self.status(vm['vmid']) != 'running':
+            return
+        if hard:
+            self.qm('stop', vm['vmid'], timeout=120)
+        else:
+            self.qm('shutdown', vm['vmid'], '--timeout', timeout, '--forceStop', 1, timeout=timeout + 60)
+
+    def clone(self, template, name, vmid=None, memory=None, cores=None, snapshot='clean-desktop'):
+        tpl = self.resolve(template)
+        if not tpl.get('template'):
+            raise LabError('%s is not a template' % template)
+        self.check_name(name)
+        vmid = int(vmid) if vmid else self.free_vmid()
+        if not self.in_range(vmid):
+            raise LabError('VM ID %d outside the lab range' % vmid)
+        self.qm('clone', tpl['vmid'], vmid, '--name', name, '--full', 0, timeout=600)
+        config = self.vm_config(vmid)
+        uuid = re.search(r'uuid=([0-9a-fA-F-]+)', config.get('smbios1', ''))
+        smbios = 'serial=%s,base64=1' % base64.b64encode(name.encode()).decode()
+        if uuid:
+            smbios = 'uuid=%s,%s' % (uuid.group(1), smbios)
+        self.qm('set', vmid, '--tags', self.cfg.tag, '--memory', memory or self.cfg.memory_mb,
+                '--cores', cores or self.cfg.cores, '--onboot', 0, '--smbios1', smbios)
+        if snapshot:
+            self.qm('snapshot', vmid, snapshot, '--description', 'Fresh linked clone of %s' % tpl['name'],
+                    timeout=300)
+        return vmid
+
+    def destroy(self, vm, allow_template=False):
+        if vm.get('template') and not allow_template:
+            raise LabError('%s is a template; pass --template to destroy it' % vm['name'])
+        if self.status(vm['vmid']) == 'running':
+            self.qm('stop', vm['vmid'], timeout=120)
+        self.qm('destroy', vm['vmid'], '--purge', 1, timeout=600)
+        self.forget(vm['vmid'])
+
+    def vm_config(self, vmid):
+        config = {}
+        for line in self.qm('config', vmid, '--current', 1).splitlines():
+            if ': ' in line:
+                key, value = line.split(': ', 1)
+                config[key] = value
+        return config
+
+    # state ---------------------------------------------------------------
+    def state_path(self, vmid):
+        return self.cfg.state_dir / ('%s.json' % vmid)
+
+    def known_hosts(self, vmid):
+        return self.cfg.state_dir / ('%s.known_hosts' % vmid)
+
+    def load_state(self, vmid):
+        try:
+            return json.loads(self.state_path(vmid).read_text())
+        except (OSError, ValueError):
+            return {}
+
+    def save_state(self, vmid, state):
+        path = self.state_path(vmid)
+        path.write_text(json.dumps(state))
+        path.chmod(0o600)
+
+    def forget(self, vmid):
+        for path in (self.state_path(vmid), self.known_hosts(vmid)):
+            try:
+                path.unlink()
+            except OSError:
+                pass
+
+    # guest agent ---------------------------------------------------------
+    def agent_ping(self, vmid):
+        return self.helper('qga', vmid, json.dumps({'execute': 'guest-ping'}), 5, timeout=30,
+                           check=False).returncode == 0
+
+    def agent_ip(self, vmid):
+        ifaces = self.helper_json('qga', vmid, json.dumps({'execute': 'guest-network-get-interfaces'}))
+        candidates = []
+        for iface in ifaces or []:
+            name = iface.get('name', '')
+            if name == 'lo' or name.startswith(('wg', 'tun', 'docker', 'virbr', 'br-', 'veth', 'wave')):
+                continue
+            for addr in iface.get('ip-addresses', []):
+                ip = addr.get('ip-address', '')
+                if addr.get('ip-address-type') == 'ipv4' and not ip.startswith(('127.', '169.254.')):
+                    candidates.append((0 if name.startswith(('en', 'eth')) else 1, ip))
+        if not candidates:
+            raise LabError('guest agent reports no IPv4 address yet')
+        return sorted(candidates)[0][1]
+
+    def refresh_ssh(self, vmid):
+        ip = self.agent_ip(vmid)
+        key = self.helper('read', vmid, '/etc/ssh/ssh_host_ed25519_key.pub').stdout.decode().split()
+        if len(key) < 2 or key[0] != 'ssh-ed25519':
+            raise LabError('could not read the guest SSH host key')
+        self.pin_host_key(vmid, ip, key[0] + ' ' + key[1])
+        return ip
+
+    def pin_host_key(self, vmid, ip, key):
+        known = self.known_hosts(vmid)
+        known.write_text('%s %s\n' % (ip, key))
+        known.chmod(0o600)
+        state = self.load_state(vmid)
+        state['ip'] = ip
+        self.save_state(vmid, state)
+
+    # guest ssh -----------------------------------------------------------
+    def ssh_args(self, vmid, ip, tty=False, batch=True):
+        args = ['ssh', '-i', str(self.cfg.private(self.cfg.ssh_key)), '-o', 'IdentitiesOnly=yes',
+                '-o', 'BatchMode=%s' % ('yes' if batch else 'no'), '-o', 'UserKnownHostsFile=%s' % self.known_hosts(vmid),
+                '-o', 'GlobalKnownHostsFile=/dev/null', '-o', 'StrictHostKeyChecking=yes',
+                '-o', 'ConnectTimeout=5', '-o', 'ServerAliveInterval=10', '-o', 'ServerAliveCountMax=6',
+                '-o', 'LogLevel=ERROR', '-t' if tty else '-T']
+        if self.cfg.ssh_jump:
+            args += ['-J', self.cfg.ssh_jump]
+        return args + ['%s@%s' % (self.cfg.guest_user, ip)]
+
+    def ssh_target(self, vmid, refresh=False):
+        state = self.load_state(vmid)
+        if refresh or not state.get('ip') or not self.known_hosts(vmid).exists():
+            return self.refresh_ssh(vmid)
+        return state['ip']
+
+    def _ssh_once(self, vmid, ip, remote, stdin, timeout, stream):
+        args = self.ssh_args(vmid, ip) + [remote]
+        try:
+            proc = subprocess.run(args, input=stdin, stdin=None if stdin is not None else subprocess.DEVNULL,
+                                  stdout=None if stream else subprocess.PIPE, stderr=subprocess.PIPE,
+                                  timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return 124, b'', b'labctl: timed out\n'
+        return proc.returncode, proc.stdout or b'', proc.stderr
+
+    SSH_DOWN_SECONDS = 30
+
+    def via_ssh(self, vmid, remote, stdin=None, timeout=None, stream=False, memo=False):
+        """Returns (rc, out, err) or None when SSH never connected.
+
+        With memo, a recent connection failure skips SSH for SSH_DOWN_SECONDS so
+        consecutive commands under a blocked network do not each wait for timeouts.
+        """
+        state = self.load_state(vmid)
+        if memo and state.get('ssh_down_until', 0) > time.time():
+            self.note('SSH failed moments ago')
+            return None
+        try:
+            ip = self.ssh_target(vmid)
+        except LabError as exc:
+            self.note('no SSH target: %s' % exc)
+            return None
+        for attempt in (0, 1):
+            rc, out, err = self._ssh_once(vmid, ip, remote, stdin, timeout, stream)
+            text = err.decode(errors='replace')
+            if rc != 255 or not SSH_NEVER_CONNECTED.search(text):
+                if self.load_state(vmid).pop('ssh_down_until', None) is not None:
+                    state = self.load_state(vmid)
+                    state.pop('ssh_down_until', None)
+                    self.save_state(vmid, state)
+                return rc, out, err
+            if attempt == 0:
+                # Address or host key may have changed (DHCP, rollback); ask the agent.
+                try:
+                    ip = self.refresh_ssh(vmid)
+                except LabError:
+                    break
+        self.note('SSH unreachable (%s)' % text.strip().splitlines()[-1] if text.strip() else 'SSH unreachable')
+        state = self.load_state(vmid)
+        state['ssh_down_until'] = time.time() + self.SSH_DOWN_SECONDS
+        self.save_state(vmid, state)
+        return None
+
+    # guest command -------------------------------------------------------
+    def session_env(self, user):
+        uid = '$(id -u %s)' % shlex.quote(user)
+        return ('env XDG_RUNTIME_DIR=/run/user/%s DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%s/bus '
+                'WAYLAND_DISPLAY=wayland-0 DISPLAY=:0 ' % (uid, uid))
+
+    def guest_run(self, vm, command, root=False, session=False, via='auto', timeout=None, stdin=None,
+                  stream=False):
+        vmid = vm['vmid']
+        user = self.cfg.guest_user
+        env = self.session_env(user) if session else ''
+        if via in ('auto', 'ssh'):
+            if root:
+                remote = 'sudo -n %sbash -c %s' % (env, shlex.quote(command))
+            else:
+                remote = '%sbash -c %s' % (env, shlex.quote(command))
+            result = self.via_ssh(vmid, remote, stdin=stdin, timeout=timeout, stream=stream, memo=via == 'auto')
+            if result is not None:
+                return result + ('ssh',)
+            if via == 'ssh':
+                return 255, b'', b'labctl: SSH unreachable\n', 'ssh'
+            self.note('falling back to the QEMU guest agent')
+        inner = env + 'bash -c ' + shlex.quote(command) if env else command
+        if root:
+            argv = ['/usr/bin/env', 'HOME=/root', '/bin/bash', '-c', inner]
+        else:
+            argv = ['/usr/sbin/runuser', '-l', user, '-c', inner]
+        limit = timeout or 600
+        proc = self.helper('exec', vmid, limit, json.dumps(argv), input=stdin or b'', timeout=limit + 60,
+                           check=False)
+        if proc.returncode != 0:
+            raise LabError('guest agent exec failed: %s' % proc.stderr.decode(errors='replace').strip())
+        result = json.loads(proc.stdout.decode())
+        out = base64.b64decode(result.get('out') or '')
+        err = base64.b64decode(result.get('err') or '')
+        if result.get('timeout'):
+            err += b'labctl: guest command timed out and was killed\n'
+        if stream:
+            sys.stdout.buffer.write(out)
+            sys.stdout.flush()
+            out = b''
+        return result.get('exitcode', 1), out, err, 'agent'
+
+    def push(self, vm, local, remote, root=False, mode=None, via='auto'):
+        data = Path(local).read_bytes()
+        command = 'cat > %s' % shlex.quote(remote)
+        if mode:
+            command += ' && chmod %s %s' % (shlex.quote(mode), shlex.quote(remote))
+        if via in ('auto', 'ssh'):
+            remote_cmd = ('sudo -n bash -c %s' if root else 'bash -c %s') % shlex.quote(command)
+            result = self.via_ssh(vm['vmid'], remote_cmd, stdin=data, timeout=600, memo=via == 'auto')
+            if result is not None:
+                if result[0] != 0:
+                    raise LabError('push failed: %s' % result[2].decode(errors='replace').strip())
+                return 'ssh'
+            if via == 'ssh':
+                raise LabError('SSH unreachable')
+            self.note('falling back to the QEMU guest agent')
+        self.helper('write', vm['vmid'], remote, input=data, timeout=600)
+        fix = []
+        if not root:
+            fix.append('chown %s: %s' % (shlex.quote(self.cfg.guest_user), shlex.quote(remote)))
+        if mode:
+            fix.append('chmod %s %s' % (shlex.quote(mode), shlex.quote(remote)))
+        if fix:
+            rc, _, err, _ = self.guest_run(vm, ' && '.join(fix), root=True, via='agent')
+            if rc != 0:
+                raise LabError('push fix-up failed: %s' % err.decode(errors='replace'))
+        return 'agent'
+
+    def pull(self, vm, remote, local, root=False, via='auto'):
+        if via in ('auto', 'ssh'):
+            command = 'cat %s' % shlex.quote(remote)
+            remote_cmd = ('sudo -n bash -c %s' if root else 'bash -c %s') % shlex.quote(command)
+            result = self.via_ssh(vm['vmid'], remote_cmd, timeout=600, memo=via == 'auto')
+            if result is not None:
+                if result[0] != 0:
+                    raise LabError('pull failed: %s' % result[2].decode(errors='replace').strip())
+                Path(local).write_bytes(result[1])
+                return 'ssh'
+            if via == 'ssh':
+                raise LabError('SSH unreachable')
+            self.note('falling back to the QEMU guest agent')
+        data = self.helper('read', vm['vmid'], remote, timeout=600).stdout
+        Path(local).write_bytes(data)
+        return 'agent'
+
+    # display -------------------------------------------------------------
+    def screendump(self, vm):
+        return self.helper('screendump', vm['vmid'], timeout=60).stdout
+
+    def screenshot(self, vm, out):
+        data = self.screendump(vm)
+        if not data.startswith(b'\x89PNG'):
+            data = ppm_to_png(data)
+        Path(out).write_bytes(data)
+        return image_size(data)
+
+    def qmp(self, vm, commands, timeout=120):
+        return self.helper_json('qmp', vm['vmid'], json.dumps(commands), timeout=timeout)
+
+    def keys(self, vm, combos, delay=0.1):
+        commands = []
+        for combo in combos:
+            commands.append({'execute': 'send-key', 'arguments': {'keys': combo_keys(combo), 'hold-time': 60}})
+            commands.append({'execute': 'sleep', 'seconds': delay})
+        self.qmp(vm, commands)
+
+    def type_text(self, vm, text, delay=0.03):
+        commands = type_commands(text, delay)
+        self.qmp(vm, commands, timeout=60 + len(text))
+
+    def pointer(self, vm, x, y, button=None, double=False, size=None):
+        width, height = size or image_size(self.screendump(vm))
+        events = [{'type': 'abs', 'data': {'axis': 'x', 'value': to_abs(x, width)}},
+                  {'type': 'abs', 'data': {'axis': 'y', 'value': to_abs(y, height)}}]
+        commands = [{'execute': 'input-send-event', 'arguments': {'events': events}},
+                    {'execute': 'sleep', 'seconds': 0.05}]
+        for _ in range(2 if double else (1 if button else 0)):
+            for down in (True, False):
+                commands.append({'execute': 'input-send-event', 'arguments': {
+                    'events': [{'type': 'btn', 'data': {'down': down, 'button': button}}]}})
+                commands.append({'execute': 'sleep', 'seconds': 0.06})
+        self.qmp(vm, commands)
+        return width, height
+
+    def scroll(self, vm, clicks):
+        button = 'wheel-down' if clicks > 0 else 'wheel-up'
+        commands = []
+        for _ in range(abs(clicks)):
+            for down in (True, False):
+                commands.append({'execute': 'input-send-event', 'arguments': {
+                    'events': [{'type': 'btn', 'data': {'down': down, 'button': button}}]}})
+            commands.append({'execute': 'sleep', 'seconds': 0.05})
+        self.qmp(vm, commands)
+
+    # waiting -------------------------------------------------------------
+    SESSION_CHECK = r'''
+u=%(user)s; want=%(want)s
+for s in $(loginctl list-sessions --no-legend | awk '{print $1}'); do
+  info=$(loginctl show-session "$s" -p Name -p Type -p Active -p Class -p State | sort | tr '\n' ' ')
+  case "$want:$info" in
+    session:*"Active=yes Class=user Name=$u "*"Type=wayland"*)
+      vt=$(loginctl show-session "$s" -p VTNr --value)
+      [ -z "$vt" ] || [ "$vt" = 0 ] || [ "$(cat /sys/class/tty/tty0/active)" = "tty$vt" ] || continue
+      pgrep -u "$u" -x gnome-shell >/dev/null && { echo "$s $info"; exit 0; } ;;
+    session-any:*"Class=user Name=$u "*)
+      echo "$s $info"; exit 0 ;;
+    greeter:*"Class=greeter"*)
+      echo "$s $info"; exit 0 ;;
+  esac
+done
+exit 1
+'''
+
+    def wait(self, vm, what, timeout=300, interval=3):
+        deadline = time.time() + timeout
+        last = ''
+        quiet, self.quiet = self.quiet, True  # expected failures while booting
+        try:
+            return self._wait(vm, what, deadline, interval)
+        finally:
+            self.quiet = quiet
+
+    def _wait(self, vm, what, deadline, interval):
+        last = ''
+        while time.time() < deadline:
+            try:
+                if what == 'agent' and self.agent_ping(vm['vmid']):
+                    return 'agent responding'
+                if what == 'ip':
+                    return self.agent_ip(vm['vmid'])
+                if what == 'ssh':
+                    result = self.via_ssh(vm['vmid'], 'true', timeout=30)
+                    if result is not None and result[0] == 0:
+                        return 'ssh ready at %s' % self.load_state(vm['vmid']).get('ip')
+                if what in ('gnome', 'session', 'greeter'):
+                    want = {'gnome': 'session', 'session': 'session-any', 'greeter': 'greeter'}[what]
+                    script = self.SESSION_CHECK % {'user': shlex.quote(self.cfg.guest_user), 'want': want}
+                    rc, out, err, _ = self.guest_run(vm, script, root=True, via='agent', timeout=30)
+                    if rc == 0:
+                        return out.decode(errors='replace').strip()
+                    last = (out + err).decode(errors='replace').strip()
+            except LabError as exc:
+                last = str(exc)
+            time.sleep(interval)
+        raise LabError('timed out waiting for %s on %s%s' % (what, vm['name'], (': ' + last[-500:]) if last else ''))
+
+    # login modes ---------------------------------------------------------
+    def login_mode(self, vm, mode, reboot=False):
+        enable = 'true' if mode == 'autologin' else 'false'
+        script = r'''set -e
+f=/etc/gdm3/custom.conf; [ -d /etc/gdm3 ] || f=/etc/gdm/custom.conf
+printf '[daemon]\nAutomaticLoginEnable=%s\nAutomaticLogin=%s\n\n[security]\n\n[xdmcp]\n\n[chooser]\n\n[debug]\n' > "$f"
+echo "$f: AutomaticLoginEnable=%s"
+''' % (enable, self.cfg.guest_user, enable)
+        rc, out, err, _ = self.guest_run(vm, script, root=True)
+        if rc != 0:
+            raise LabError('login-mode failed: %s' % err.decode(errors='replace'))
+        if reboot:
+            self.forget(vm['vmid'])
+            self.qm('reboot', vm['vmid'], '--timeout', 120, timeout=200)
+        return out.decode().strip()
+
+    def gdm_login(self, vm, timeout=180):
+        self.wait(vm, 'greeter', timeout=timeout)
+        time.sleep(3)
+        # The greeter starts on the user list; Enter selects the only user.
+        self.keys(vm, ['ret'])
+        time.sleep(2)
+        self.type_text(vm, self.cfg.password())
+        self.keys(vm, ['ret'])
+        return self.wait(vm, 'gnome', timeout=timeout)
+
+
+# --------------------------------------------------------------------------- templates
+
+STAGED_SCRIPT = '/var/tmp/wave-provision.sh'  # guest /tmp is cleared at boot
+DISTROS = {
+    'ubuntu2404': {
+        'name': 'wave-tpl-ubuntu2404',
+        'image': 'ubuntu-24.04-server-cloudimg-amd64.img',
+        'url': 'https://cloud-images.ubuntu.com/releases/noble/release-20261017/'
+               'ubuntu-24.04-server-cloudimg-amd64.img',
+        'sha256': '04e8f2461a16a44e78a370284471f29616cdd9baf1893df25807b71f985b6c94',
+        'provision': 'templates/ubuntu-provision.sh',
+        'disk': '40G',
+    },
+    'ubuntu2604': {
+        'name': 'wave-tpl-ubuntu2604',
+        'image': 'ubuntu-26.04-server-cloudimg-amd64.img',
+        'url': 'https://cloud-images.ubuntu.com/releases/resolute/release-20261016/'
+               'ubuntu-26.04-server-cloudimg-amd64.img',
+        'sha256': '5645d0318ad21f643ebb1ac4567514620e9893380b07b0201fda163baa5b7eb5',
+        'provision': 'templates/ubuntu-provision.sh',
+        'disk': '40G',
+    },
+    'fedora45': {
+        'name': 'wave-tpl-fedora45',
+        'image': 'Fedora-Cloud-Base-Generic-45-1.4.x86_64.qcow2',
+        'url': 'https://dl.fedoraproject.org/pub/fedora/linux/releases/45/Cloud/x86_64/images/'
+               'Fedora-Cloud-Base-Generic-45-1.4.x86_64.qcow2',
+        'sha256': '50bdc5e70f6a24f540932d15411c1c6ae9fcfa40fb990d876d83c5cc823b2ad0',
+        'provision': 'templates/fedora-provision.sh',
+        'disk': '40G',
+    },
+}
+
+
+def template_create(lab, distro, vmid=None, name=None, keep=False):
+    """Create, provision, verify and seal a desktop template from a cloud image."""
+    spec = DISTROS[distro]
+    cfg = lab.cfg
+    name = name or spec['name']
+    lab.check_name(name)
+    vmid = int(vmid) if vmid else lab.free_vmid(cfg.vmid_min)
+    if not lab.in_range(vmid):
+        raise LabError('VM ID outside range')
+    image = '%s/%s' % (cfg.image_dir, spec['image'])
+    q = shlex.quote
+    lab.note('checking image %s' % spec['image'])
+    lab.host('install -d -m 700 %s && cd %s && (echo %s | sha256sum -c --status - || '
+             '(curl -fsSL --retry 3 -o %s.part %s && mv %s.part %s && echo %s | sha256sum -c -))' % (
+                 q(cfg.image_dir), q(cfg.image_dir), q('%s  %s' % (spec['sha256'], spec['image'])),
+                 q(spec['image']), q(spec['url']), q(spec['image']), q(spec['image']),
+                 q('%s  %s' % (spec['sha256'], spec['image']))), timeout=1800)
+    st = cfg.storage
+    lab.note('creating VM %d (%s) on %s' % (vmid, name, st))
+    lab.qm('create', vmid, '--name', name, '--tags', cfg.tag, '--memory', cfg.memory_mb, '--cores',
+           max(cfg.cores, 4), '--cpu', 'host', '--machine', 'q35', '--bios', 'ovmf', '--ostype', 'l26',
+           '--agent', 'enabled=1,fstrim_cloned_disks=1', '--scsihw', 'virtio-scsi-single',
+           '--net0', 'virtio,bridge=%s' % cfg.bridge, '--vga', 'virtio', '--tablet', 1,
+           '--serial0', 'socket', '--rng0', 'source=/dev/urandom', '--onboot', 0)
+    try:
+        lab.qm('set', vmid, '--efidisk0', '%s:1,efitype=4m,pre-enrolled-keys=0,format=qcow2' % st)
+        lab.qm('set', vmid, '--scsi0', '%s:0,import-from=%s,format=qcow2,discard=on,ssd=1,iothread=1' % (
+            st, image), timeout=900)
+        lab.qm('resize', vmid, 'scsi0', spec['disk'])
+        pub = cfg.private(cfg.ssh_key + '.pub').read_bytes()
+        keyfile = '/tmp/wave-lab-%d.pub' % vmid
+        lab.host('cat > %s' % keyfile, input=pub)
+        lab.qm('set', vmid, '--ide2', '%s:cloudinit' % st, '--ciuser', cfg.guest_user, '--sshkeys', keyfile,
+               '--ipconfig0', 'ip=dhcp', '--ciupgrade', 0, '--boot', 'order=scsi0')
+        lab.host('rm -f %s' % keyfile)
+        lab.note('first boot (cloud-init); watching the serial console for address and host key')
+        lab.qm('start', vmid, timeout=180)
+        console = lab.helper('serial', vmid, 600, '', 'END SSH HOST KEY KEYS', timeout=700,
+                             check=False).stdout.decode(errors='replace')
+        found = re.findall(r'ci-info: \|\s*(e\w+)\s*\|\s*True\s*\|\s*(\d+\.\d+\.\d+\.\d+)\s*\|', console)
+        key = re.search(r'(ssh-ed25519 [A-Za-z0-9+/=]+)', console.split('BEGIN SSH HOST KEY KEYS')[-1])
+        if not found or not key:
+            raise LabError('could not read address/host key from the serial console')
+        lab.pin_host_key(vmid, found[0][1], key.group(1))
+        vm = {'vmid': vmid, 'name': name}
+        lab.wait(vm, 'ssh', timeout=300)
+        provision = LAB_DIR / spec['provision']
+        lab.push(vm, provision, STAGED_SCRIPT, via='ssh')
+        lab.push_secret(vm, cfg.password())
+        env = 'WAVE_LAB_USER=%s' % q(cfg.guest_user)
+        if cfg.apt_proxy:
+            env += ' WAVE_APT_PROXY=%s' % q(cfg.apt_proxy)
+        lab.note('provisioning (this takes a while; log: journalctl -u wave-lab-provision)')
+        rc = lab.provision_unit(vm, STAGED_SCRIPT, 'install', env)
+        if rc != 0:
+            raise LabError('provisioning failed; inspect VM %d (kept)' % vmid)
+        lab.note('rebooting into the desktop')
+        lab.qm('reboot', vmid, '--timeout', 180, timeout=300)
+        lab.wait(vm, 'agent', timeout=600)
+        lab.note(lab.wait(vm, 'gnome', timeout=600))
+        time.sleep(15)
+        shot = cfg.dir / 'artifacts' / ('%s-provisioned.png' % name)
+        lab.screenshot(vm, shot)
+        lab.note('screenshot %s' % shot)
+        template_seal(lab, vm, distro)
+        return vmid
+    except Exception:
+        if not keep:
+            lab.note('VM %d left in place for inspection; destroy it with: labctl destroy %d --template' % (
+                vmid, vmid))
+        raise
+
+
+def template_seal(lab, vm, distro):
+    """Seal a provisioned guest and convert it to a template."""
+    spec, cfg, vmid = DISTROS[distro], lab.cfg, vm['vmid']
+    if lab.status(vmid) != 'running':
+        raise LabError('start %s first' % vm['name'])
+    lab.push(vm, LAB_DIR / spec['provision'], STAGED_SCRIPT, root=True)
+    env = 'WAVE_LAB_USER=%s' % shlex.quote(cfg.guest_user)
+    rc = lab.provision_unit(vm, STAGED_SCRIPT, 'seal', env, via='agent')
+    if rc != 0:
+        raise LabError('sealing failed; inspect VM %d (kept)' % vmid)
+    lab.qm('shutdown', vmid, '--timeout', 180, '--forceStop', 1, timeout=300)
+    current = lab.vm_config(vmid)
+    stale = [k for k in ('ide2', 'ciuser', 'sshkeys', 'ipconfig0', 'ciupgrade') if k in current]
+    if stale:
+        lab.qm('set', vmid, '--delete', ','.join(stale))
+    lab.qm('set', vmid, '--cores', cfg.cores, '--description',
+           'Wave lab template %s from %s (sha256 %s), sealed %s' % (
+               distro, spec['image'], spec['sha256'], datetime.date.today().isoformat()))
+    lab.qm('template', vmid, timeout=300)
+    lab.forget(vmid)
+
+
+def _push_secret(self, vm, secret):
+    rc, _, err, _ = self.guest_run(vm, 'umask 077; cat > /root/.wave-lab-password', root=True,
+                                   stdin=(secret + '\n').encode())
+    if rc != 0:
+        raise LabError('could not stage the password: %s' % err.decode(errors='replace'))
+
+
+def _provision_unit(self, vm, script, phase, env, via='auto'):
+    """Run a provisioning phase as a transient unit so an SSH drop cannot kill it."""
+    unit = 'wave-lab-provision-%s-%d' % (phase, int(time.time()))
+    command = ('systemd-run --unit=%s --wait --collect --quiet -p TimeoutStartSec=infinity '
+               '/usr/bin/env %s bash %s %s' % (unit, env, shlex.quote(script), shlex.quote(phase)))
+    rc, _, err, _ = self.guest_run(vm, command, root=True, via=via, timeout=7200)
+    log = self.guest_run(vm, 'journalctl -u %s -o cat --no-pager | tail -n 40' % unit, root=True, via=via)[1]
+    sys.stderr.write(log.decode(errors='replace') + err.decode(errors='replace'))
+    return rc
+
+
+Lab.push_secret = _push_secret
+Lab.provision_unit = _provision_unit
+
+
+# --------------------------------------------------------------------------- packages
+
+def source_tarball(src, ref, worktree, dest):
+    """Write tracked source (never .git, ignored or private files) to dest; return metadata."""
+    src = Path(src).resolve()
+    meta = {'source': src.name}
+    is_git = subprocess.run(['git', '-C', str(src), 'rev-parse', '--is-inside-work-tree'],
+                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL).returncode == 0
+    if is_git:
+        rev = subprocess.check_output(['git', '-C', str(src), 'rev-parse', ref + '^{commit}']).decode().strip()
+        meta['revision'] = rev
+        meta['source_date_epoch'] = int(subprocess.check_output(
+            ['git', '-C', str(src), 'show', '-s', '--format=%ct', rev]).decode())
+        if worktree:
+            files = subprocess.check_output(['git', '-C', str(src), 'ls-files', '-z']).decode().split('\0')
+            dirty = subprocess.check_output(['git', '-C', str(src), 'status', '--porcelain',
+                                             '--untracked-files=no']).decode().strip()
+            meta['revision'] = rev + ('-dirty' if dirty else '')
+            with tarfile.open(dest, 'w:gz') as tar:
+                for rel in sorted(f for f in files if f):
+                    path = src / rel
+                    if path.is_file() and not path.is_symlink():
+                        tar.add(str(path), arcname=rel, recursive=False)
+        else:
+            with open(dest, 'wb') as out:
+                subprocess.run(['git', '-C', str(src), 'archive', '--format=tar.gz', rev], stdout=out,
+                               check=True)
+    else:
+        meta['revision'] = 'unversioned'
+        meta['source_date_epoch'] = int(time.time())
+        skip = {'.git', 'target', 'node_modules', '.lab', '.reference'}
+
+        def keep(info):
+            parts = Path(info.name).parts
+            if any(p in skip or p.startswith('.env') for p in parts):
+                return None
+            return info
+
+        with tarfile.open(dest, 'w:gz') as tar:
+            for child in sorted(src.iterdir()):
+                tar.add(str(child), arcname=child.name, filter=keep)
+    return meta
+
+
+def build_packages(lab, src, out, ref='HEAD', worktree=False, keep_running=False, checks=False):
+    cfg = lab.cfg
+    bcfg = dict({'name': 'wave-builder', 'template': 'wave-tpl-ubuntu2404', 'cores': 4, 'memory_mb': 4096},
+                **(cfg.builder or {}))
+    out = Path(out).resolve()
+    with tempfile.TemporaryDirectory() as tmp:
+        tarball = Path(tmp) / 'source.tar.gz'
+        meta = source_tarball(src, ref, worktree, tarball)
+        names = {vm.get('name'): vm for vm in lab.lab_vms()}
+        created = bcfg['name'] not in names
+        if created:
+            lab.note('creating builder %s from %s' % (bcfg['name'], bcfg['template']))
+            lab.clone(bcfg['template'], bcfg['name'], memory=bcfg['memory_mb'], cores=bcfg['cores'],
+                      snapshot=None)
+        vm = lab.resolve(bcfg['name'])
+        was_running = lab.status(vm['vmid']) == 'running'
+        lab.start(vm)
+        try:
+            lab.wait(vm, 'ssh', timeout=600)
+            if created:
+                lab.push(vm, LAB_DIR / 'builder' / 'setup-ubuntu.sh', '/tmp/wave-builder-setup.sh')
+                lab.note('installing the build toolchain')
+                rc, _, err, _ = lab.guest_run(vm, 'bash /tmp/wave-builder-setup.sh', root=True, timeout=3600,
+                                              stream=True)
+                if rc != 0:
+                    raise LabError('builder setup failed: %s' % err.decode(errors='replace')[-2000:])
+                lab.guest_run(vm, 'bash /tmp/wave-builder-setup.sh user', timeout=3600, stream=True)
+            lab.push(vm, tarball, '/tmp/wave-source.tar.gz')
+            lab.push(vm, LAB_DIR / 'builder' / 'build.sh', '/tmp/wave-build.sh')
+            lab.note('building %s (%s)' % (meta['source'], meta['revision']))
+            env = 'WAVE_REVISION=%s SOURCE_DATE_EPOCH=%d RUN_CHECKS=%d CARGO_BUILD_JOBS=%d' % (
+                shlex.quote(meta['revision']), meta['source_date_epoch'], 1 if checks else 0, bcfg['cores'])
+            rc, _, err, _ = lab.guest_run(vm, '%s bash /tmp/wave-build.sh /tmp/wave-source.tar.gz' % env,
+                                          timeout=7200, stream=True)
+            if rc != 0:
+                raise LabError('build failed: %s' % err.decode(errors='replace')[-3000:])
+            listing = lab.guest_run(vm, 'cd ~/build/out && ls -1')[1].decode().split()
+            version = next((f.split('_')[1].rsplit('-', 1)[0] for f in listing if f.endswith('.deb')), 'unknown')
+            dest = out / ('wave-vpn-%s-%s' % (version, meta['revision'][:12] + (
+                '-dirty' if meta['revision'].endswith('-dirty') else '')))
+            dest.mkdir(parents=True, exist_ok=True)
+            for name in listing:
+                lab.pull(vm, '/home/%s/build/out/%s' % (cfg.guest_user, name), dest / name)
+            toolchain = lab.guest_run(vm, '. ~/.cargo/env && rustc -V && /usr/local/bin/nfpm --version | '
+                                          'sed -n "s/^GitVersion: *//p"')[1].decode().split('\n')
+            meta.update({'version': version, 'built': datetime.datetime.utcnow().isoformat() + 'Z',
+                         'builder_template': bcfg['template'], 'rustc': toolchain[0].strip(),
+                         'nfpm': (toolchain[1].strip() if len(toolchain) > 1 else ''), 'files': {}})
+            for name in listing:
+                meta['files'][name] = hashlib.sha256((dest / name).read_bytes()).hexdigest()
+            (dest / 'BUILD.json').write_text(json.dumps(meta, indent=2) + '\n')
+            return dest
+        finally:
+            if not keep_running and not was_running:
+                lab.stop(vm)
+
+
+# --------------------------------------------------------------------------- CLI
+
+def print_table(rows, headers):
+    widths = [max(len(str(r[i])) for r in rows + [headers]) for i in range(len(headers))]
+    for row in [headers] + rows:
+        print('  '.join(str(c).ljust(w) for c, w in zip(row, widths)).rstrip())
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog='labctl', description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--config', help='private config (default: $WAVE_LAB_CONFIG or nearest .lab/config.json)')
+    parser.add_argument('-v', '--verbose', action='store_true')
+    parser.add_argument('-q', '--quiet', action='store_true', help='suppress fallback notes')
+    sub = parser.add_subparsers(dest='cmd', required=True)
+
+    def add(name, help_text, *vm_args):
+        p = sub.add_parser(name, help=help_text, description=help_text)
+        for arg in vm_args:
+            p.add_argument(arg)
+        return p
+
+    add('list', 'list lab VMs and templates')
+    p = add('clone', 'linked clone of a template', 'template', 'name')
+    p.add_argument('--vmid', type=int)
+    p.add_argument('--memory', type=int)
+    p.add_argument('--cores', type=int)
+    p.add_argument('--no-snapshot', action='store_true', help='skip the "clean-desktop" snapshot')
+    p.add_argument('--start', action='store_true')
+    p = add('start', 'start a VM', 'name')
+    p.add_argument('--force', action='store_true', help='ignore max_running')
+    p.add_argument('--wait', choices=['agent', 'ssh', 'gnome'])
+    p = add('stop', 'shut a VM down (forced after the timeout)', 'name')
+    p.add_argument('--hard', action='store_true')
+    p.add_argument('--timeout', type=int, default=90)
+    p = add('destroy', 'destroy a lab VM', 'name')
+    p.add_argument('--template', action='store_true', help='allow destroying a template')
+    p = add('snapshot', 'take a snapshot', 'name', 'snap')
+    p.add_argument('--vmstate', action='store_true', help='include RAM (VM keeps running state)')
+    p.add_argument('--description', default='')
+    p = add('rollback', 'roll back to a snapshot', 'name', 'snap')
+    p.add_argument('--start', action='store_true')
+    add('snapshots', 'list snapshots', 'name')
+    add('delsnapshot', 'delete a snapshot', 'name', 'snap')
+    for name, text in [('run', 'run a shell command (SSH, else guest agent); quote it or put it after --')]:
+        p = add(name, text, 'name')
+        p.add_argument('--root', action='store_true', help='run as root (sudo / agent)')
+        p.add_argument('--session', action='store_true', help='export the graphical session environment')
+        p.add_argument('--via', choices=['auto', 'ssh', 'agent'], default='auto')
+        p.add_argument('--timeout', type=int)
+        p.add_argument('--stdin', action='store_true', help='pass our stdin to the command')
+        p.add_argument('--json', action='store_true', help='print {via, exitcode, stdout, stderr}')
+    p = add('push', 'copy a local file into the guest', 'name', 'local', 'remote')
+    p.add_argument('--root', action='store_true')
+    p.add_argument('--mode')
+    p.add_argument('--via', choices=['auto', 'ssh', 'agent'], default='auto')
+    p = add('pull', 'copy a guest file to the workstation', 'name', 'remote', 'local')
+    p.add_argument('--root', action='store_true')
+    p.add_argument('--via', choices=['auto', 'ssh', 'agent'], default='auto')
+    add('screenshot', 'save the guest display as PNG (host-side, no guest network)', 'name', 'out')
+    p = add('key', 'press key combinations, e.g. ctrl-alt-t ret super', 'name')
+    p.add_argument('combos', nargs='+')
+    p = add('type', 'type text with the US keyboard map', 'name', 'text')
+    p.add_argument('--delay', type=float, default=0.03)
+    p = add('click', 'click at screen pixel X Y (absolute tablet)', 'name')
+    p.add_argument('x', type=int)
+    p.add_argument('y', type=int)
+    p.add_argument('--button', choices=['left', 'right', 'middle'], default='left')
+    p.add_argument('--double', action='store_true')
+    p = add('move', 'move the pointer to pixel X Y', 'name')
+    p.add_argument('x', type=int)
+    p.add_argument('y', type=int)
+    p = add('scroll', 'scroll the wheel (positive = down)', 'name')
+    p.add_argument('clicks', type=int)
+    add('console', 'interactive serial console (exit with Ctrl+O)', 'name')
+    p = add('serial', 'send to / read from the serial console non-interactively', 'name')
+    p.add_argument('--send', default='', help='text to send; escapes like \\r are interpreted')
+    p.add_argument('--read', type=float, default=3.0, help='seconds to read')
+    p.add_argument('--until', default='', help='stop reading when this regex appears')
+    p = add('wait', 'wait for agent, ip, ssh, greeter, session or gnome', 'name', 'what')
+    p.add_argument('--timeout', type=int, default=300)
+    add('ip', 'print the guest IPv4 address (guest agent)', 'name')
+    p = add('ssh', 'interactive SSH session as the guest user', 'name')
+    p = add('login-mode', 'switch GDM between autologin and password login', 'name')
+    p.add_argument('mode', choices=['autologin', 'password'])
+    p.add_argument('--reboot', action='store_true')
+    p = add('gdm-login', 'log in at the GDM greeter by typing the private password', 'name')
+    p.add_argument('--timeout', type=int, default=180)
+    p = add('build-packages', 'build .deb/.rpm/Arch packages in the builder VM', 'src', 'out')
+    p.add_argument('--ref', default='HEAD', help='Git revision to archive (default HEAD)')
+    p.add_argument('--worktree', action='store_true', help='tracked files as in the working tree')
+    p.add_argument('--checks', action='store_true', help='also run fmt/test/clippy')
+    p.add_argument('--keep-running', action='store_true')
+    p = add('template-create', 'build a sealed desktop template from a cloud image')
+    p.add_argument('distro', choices=sorted(DISTROS))
+    p.add_argument('--vmid', type=int)
+    p.add_argument('--name')
+    p = add('template-seal', 'seal a running provisioned guest and convert it to a template', 'name')
+    p.add_argument('distro', choices=sorted(DISTROS))
+
+    argv = list(sys.argv[1:] if argv is None else argv)
+    tail = []
+    if '--' in argv:
+        cut = argv.index('--')
+        argv, tail = argv[:cut], argv[cut + 1:]
+    # run/ssh take the rest as the guest command; quote it or put it after --.
+    args, extra = parser.parse_known_args(argv)
+    if args.cmd == 'run':
+        args.command = extra + tail
+    elif args.cmd == 'ssh':
+        args.args = extra + tail
+    elif extra or tail:
+        parser.error('unrecognized arguments: %s' % ' '.join(extra + tail))
+    try:
+        cfg = Config(find_config(args.config))
+        lab = Lab(cfg, verbose=args.verbose, quiet=args.quiet)
+        return dispatch(lab, args)
+    except LabError as exc:
+        sys.stderr.write('labctl: %s\n' % exc)
+        return 1
+    except KeyboardInterrupt:
+        return 130
+
+
+def dispatch(lab, args):
+    cmd = args.cmd
+    if cmd == 'list':
+        rows = [[vm['vmid'], vm.get('name', ''), 'template' if vm.get('template') else vm.get('status', ''),
+                 '%d' % ((vm.get('maxmem') or 0) // 2 ** 20), vm.get('cpus', '')] for vm in lab.lab_vms()]
+        print_table(rows, ['VMID', 'NAME', 'STATUS', 'MEM_MB', 'CPUS']) if rows else print('no lab VMs')
+        return 0
+    if cmd == 'template-create':
+        vmid = template_create(lab, args.distro, args.vmid, args.name)
+        print('template %d ready' % vmid)
+        return 0
+    if cmd == 'clone':
+        vmid = lab.clone(args.template, args.name, args.vmid, args.memory, args.cores,
+                         snapshot=None if args.no_snapshot else 'clean-desktop')
+        print('cloned %s as %s (%d)' % (args.template, args.name, vmid))
+        if args.start:
+            lab.start(lab.resolve(vmid))
+        return 0
+    if cmd == 'build-packages':
+        dest = build_packages(lab, args.src, args.out, args.ref, args.worktree, args.keep_running, args.checks)
+        print(dest)
+        return 0
+    vm = lab.resolve(args.name)
+    vmid = vm['vmid']
+    if cmd == 'template-seal':
+        template_seal(lab, vm, args.distro)
+        print('template %d ready' % vmid)
+    elif cmd == 'start':
+        lab.start(vm, force=args.force)
+        if args.wait:
+            print(lab.wait(vm, args.wait))
+    elif cmd == 'stop':
+        lab.stop(vm, hard=args.hard, timeout=args.timeout)
+    elif cmd == 'destroy':
+        lab.destroy(vm, allow_template=args.template)
+        print('destroyed %s (%d)' % (vm['name'], vmid))
+    elif cmd == 'snapshot':
+        extra = ['--vmstate', 1] if args.vmstate else []
+        lab.qm('snapshot', vmid, args.snap, '--description', args.description, *extra, timeout=900)
+    elif cmd == 'rollback':
+        lab.qm('rollback', vmid, args.snap, *(['--start', 1] if args.start else []), timeout=900)
+        lab.forget(vmid)
+    elif cmd == 'snapshots':
+        sys.stdout.write(lab.qm('listsnapshot', vmid))
+    elif cmd == 'delsnapshot':
+        lab.qm('delsnapshot', vmid, args.snap, timeout=900)
+    elif cmd == 'run':
+        command = args.command
+        if not command:
+            raise LabError('no command given')
+        text = command[0] if len(command) == 1 else ' '.join(command)
+        stdin = sys.stdin.buffer.read() if args.stdin else None
+        rc, out, err, via = lab.guest_run(vm, text, root=args.root, session=args.session, via=args.via,
+                                          timeout=args.timeout, stdin=stdin)
+        if args.json:
+            print(json.dumps({'via': via, 'exitcode': rc, 'stdout': out.decode(errors='replace'),
+                              'stderr': err.decode(errors='replace')}))
+        else:
+            sys.stdout.buffer.write(out)
+            sys.stderr.buffer.write(err)
+        return rc if isinstance(rc, int) and 0 <= rc < 256 else 1
+    elif cmd == 'push':
+        via = lab.push(vm, args.local, args.remote, root=args.root, mode=args.mode, via=args.via)
+        lab.note('pushed via %s' % via)
+    elif cmd == 'pull':
+        via = lab.pull(vm, args.remote, args.local, root=args.root, via=args.via)
+        lab.note('pulled via %s' % via)
+    elif cmd == 'screenshot':
+        width, height = lab.screenshot(vm, args.out)
+        print('%s %dx%d' % (args.out, width, height))
+    elif cmd == 'key':
+        lab.keys(vm, args.combos)
+    elif cmd == 'type':
+        lab.type_text(vm, args.text, args.delay)
+    elif cmd == 'click':
+        lab.pointer(vm, args.x, args.y, button=args.button, double=args.double)
+    elif cmd == 'move':
+        lab.pointer(vm, args.x, args.y)
+    elif cmd == 'scroll':
+        lab.scroll(vm, args.clicks)
+    elif cmd == 'console':
+        os.execvp('ssh', ['ssh', '-t', lab.cfg.host, 'qm', 'terminal', str(vmid)])
+    elif cmd == 'serial':
+        proc = lab.helper('serial', vmid, args.read, args.send, args.until, timeout=args.read + 60)
+        sys.stdout.buffer.write(proc.stdout)
+    elif cmd == 'wait':
+        if args.what not in ('agent', 'ip', 'ssh', 'greeter', 'session', 'gnome'):
+            raise LabError('wait for one of: agent ip ssh greeter session gnome')
+        print(lab.wait(vm, args.what, timeout=args.timeout))
+    elif cmd == 'ip':
+        print(lab.agent_ip(vmid))
+    elif cmd == 'ssh':
+        ip = lab.ssh_target(vmid, refresh=True)
+        extra = args.args
+        os.execvp('ssh', lab.ssh_args(vmid, ip, tty=not extra, batch=False) + extra)
+    elif cmd == 'login-mode':
+        print(lab.login_mode(vm, args.mode, reboot=args.reboot))
+    elif cmd == 'gdm-login':
+        print(lab.gdm_login(vm, timeout=args.timeout))
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
