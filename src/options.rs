@@ -19,7 +19,7 @@ impl Section {
             Self::General => "General",
             Self::Network => "Network",
             Self::Wireguard => "WireGuard",
-            Self::Lock => "Network lock",
+            Self::Lock => "Network Lock",
             Self::Advanced => "Advanced",
         }
     }
@@ -236,7 +236,7 @@ pub const FIELDS: &[Field] = &[
     ),
     f!(
         "netlock",
-        "Network lock",
+        "Network Lock",
         "Block traffic outside the tunnel",
         "Connection",
         Lock,

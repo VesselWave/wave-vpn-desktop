@@ -11,7 +11,7 @@ Contracts run with `python3 scripts/check-forum.py` (report in `target/forum/con
 | # | Android change | Linux verdict | Contract |
 | --- | --- | --- | --- |
 | P-01 | Failed-handshake recovery: refresh is best effort, deadline/cooldown never gate a cached connect | **Already correct**; adjacent defect D-05 fixed | `forum_p01_…`, `forum_d05_…` |
-| P-02 | Manifest timeout settles; endpoint backoff without penalizing user cancellation | **Already correct** for requests; not applicable (no per-endpoint memory). Sign-in has no overall deadline: D-09 | `forum_p02_…` |
+| P-02 | Manifest timeout settles; endpoint backoff without penalizing user cancellation | **Already correct** for requests; not applicable (no per-endpoint memory). Sign-in overall deadline and Cancel added in both apps (D-09) | `forum_p02_…` |
 | P-03 | Optional bootstrap/routing validated separately from servers | **Already correct**; adjacent defects D-10, D-11 fixed | `forum_p02_…`, `forum_d10_…`, `forum_d11_…` |
 | P-04 | Explain refused/revoked VPN permission | **Defect, fixed** (D-06) | `forum_d06_…` (4) |
 | P-05 | Visible retained traffic blocking with Stop | **Defect, fixed** (D-03) | `forum_d03_…` (2) |
@@ -37,7 +37,7 @@ Android gated the next Connect on a 3-second account refresh and rethrew its tim
 
 `Client::request` (`src/client.rs:201`) tries each distinct bootstrap address once per request, pausing 250 ms → 2 s between attempts (`src/bootstrap.rs:411`), and stops between attempts on cancellation (`src/client.rs:217`, `:234`, `:265`). Each attempt is bounded by the HTTP timeout (10 s). Sign-in always settles: `Event::Login` clears `busy` on success and failure (`src/gui.rs:563`). There is no cross-request endpoint memory, so there is nothing for a user cancellation to penalize. Staff accepted this design in 0.1.3.
 
-Open: a sign-in against blackholed endpoints can show "Signing in…" for about two minutes with no Cancel (D-09).
+Resolved (D-09): sign-in in both apps now has a shared 45-second overall deadline that settles as an ordinary failure, and a visible Cancel that reports no error, penalizes nothing and keeps the typed password.
 
 ### P-03 Optional bootstrap validated separately
 

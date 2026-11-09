@@ -1725,8 +1725,9 @@ impl Wave {
     /// Settle the sign-in in progress (same rules as Android). Its request
     /// stops failing over and can no longer store bootstrap data; a late
     /// result is discarded. The deadline is an ordinary sign-in failure. A
-    /// user Cancel is not a failure: no error, nothing saved, and the form
-    /// keeps the typed password for an immediate retry.
+    /// user Cancel is not a failure: no error and nothing saved. Either way
+    /// the form keeps the typed password for an immediate retry, as on
+    /// Android: neither outcome says the password was wrong.
     fn settle_sign_in(&mut self, timed_out: bool) {
         let Some((_, flag)) = self.sign_in.take() else {
             return;
@@ -1734,14 +1735,14 @@ impl Wave {
         wave_protocol::cancel_requests(&flag);
         self.account_epoch = self.account_epoch.wrapping_add(1);
         self.busy = false;
+        if self.password.is_empty() {
+            std::mem::swap(&mut self.password, &mut self.session_password);
+        }
         if timed_out {
             self.last_failure = wave_protocol::diagnostics::Failure::SignInNetwork;
             self.error = Some(wave_protocol::SIGN_IN_TIMED_OUT.into());
             self.log(Level::Error, wave_protocol::SIGN_IN_TIMED_OUT.into());
         } else {
-            if self.password.is_empty() {
-                std::mem::swap(&mut self.password, &mut self.session_password);
-            }
             self.log(Level::Info, "Sign-in cancelled".into());
         }
         if self.account.is_none() {

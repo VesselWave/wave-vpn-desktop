@@ -116,9 +116,9 @@ pub fn shell(app: &Wave) -> Element<'_, Message> {
             text(if !app.protection_known {
                 "Lock status unknown"
             } else if lock_on {
-                "Network lock on"
+                "Network Lock on"
             } else {
-                "Network lock off"
+                "Network Lock off"
             })
             .size(12)
             .wrapping(iced::widget::text::Wrapping::None),

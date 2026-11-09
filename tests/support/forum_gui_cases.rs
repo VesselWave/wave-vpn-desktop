@@ -386,6 +386,10 @@ fn forum_d09_sign_in_deadline_settles_as_an_ordinary_failure() {
         "the request stops failing over"
     );
     assert!(app.session_password.is_empty(), "no session secret kept");
+    assert_eq!(
+        app.password, "typed-secret",
+        "a timeout keeps what was typed, as on Android"
+    );
     // A response arriving after the deadline is discarded, never adopted.
     let m = app_with_manifest();
     late_login(&mut app, epoch, Ok((account(&["test"]), m)));
