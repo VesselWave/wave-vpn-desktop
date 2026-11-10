@@ -87,3 +87,10 @@ That's why everything is published: the source, the protocol references in [prov
 ---
 
 GPL-3.0-or-later. Independent project, not affiliated with or endorsed by AirVPN. Report security issues privately to **vesselwave@protonmail.com** ([security policy](SECURITY.md)).
+
+### Configure before signing in
+
+All tabs and settings are available before sign-in. Save your settings locally,
+then sign in from Settings → General when ready. Browsing the interface does
+not contact external servers; signed-out refreshes and latency probes do not
+start requests. Connect opens account settings when you are signed out.

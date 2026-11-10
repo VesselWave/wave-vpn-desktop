@@ -281,6 +281,18 @@ pub fn shell(app: &Wave) -> Element<'_, Message> {
             );
         }
     }
+    if app.account.is_none() {
+        main = main.push(
+            column![
+                text("Configure before signing in").size(16).font(theme::SEMIBOLD),
+                text("Browse the interface and save settings locally. Wave makes no external requests until you sign in.")
+                    .size(13).style(theme::muted),
+                button(text("Sign in to AirVPN").size(13))
+                    .style(theme::outline)
+                    .on_press(Message::Section(Section::General))
+            ].spacing(8),
+        );
+    }
     main = main.push(content);
     row![
         sidebar,

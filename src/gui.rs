@@ -1410,7 +1410,7 @@ impl Wave {
         )
     }
     fn measure(&mut self) {
-        if self.preview {
+        if self.preview || self.account.is_none() {
             return;
         }
         let Some(targets) = self.latency_targets(rand::random()) else {
@@ -2325,6 +2325,29 @@ mod safety_tests {
         app.preview = true;
         app.prefs.options = Options::default();
         app
+    }
+    #[test]
+    fn signed_out_browsing_never_starts_requests_even_with_cached_servers() {
+        let mut app = app();
+        preview::setup(&mut app);
+        app.account = None;
+        app.preview = false;
+        app.latency.clear();
+        assert!(app.manifest.is_some());
+        for tab in [Tab::Overview, Tab::Servers, Tab::Logs, Tab::Settings] {
+            let _ = app.update(Message::Page(tab));
+        }
+        let _ = app.update(Message::Option("port", "51820".into()));
+        assert_eq!(app.draft.get("port"), "51820");
+        let _ = app.update(Message::Refresh);
+        app.measure();
+        assert!(!app.refresh.running());
+        assert!(!app.latency.running());
+        assert!(app.latency.next().is_none());
+        let _ = app.update(Message::Connect);
+        assert_eq!(app.tab, Tab::Settings);
+        assert!(app.control.is_none() && !app.busy);
+        assert!(app.sign_in.is_none());
     }
     #[test]
     fn disconnect_warnings_require_a_current_idle_status() {
