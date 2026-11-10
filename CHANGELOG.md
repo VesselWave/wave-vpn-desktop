@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+## 0.1.4 · 2026-11-09 · early release
+
+- When upgrading from published 0.1.3, disconnect, quit and reboot after installation to activate the new helper.
 - Connecting works on Ubuntu 26.04: WireGuard's configuration is passed on standard input because Ubuntu's AppArmor profile for wg only allows files under /etc/wireguard (final round F-01)
 - A stale Wayland display setting with X11 available now opens the window on X11 instead of crashing (final round F-02)
 - The saved account is found on desktops whose keyring service runs without D-Bus activation, such as KWallet on openSUSE, instead of falling back to plain-text storage (R2 N-03)
@@ -38,6 +41,8 @@
   - With a plain `/etc/resolv.conf` managed by NetworkManager (the default on Debian 13 and openSUSE), DNS now stays on the tunnel for the whole session. Before, NetworkManager rewrote the file seconds after any reconnect: DNS leaked with Network Lock off while Overview said **DNS: Verified**, and failed with Network Lock on. Wave now holds NetworkManager off the file with a temporary `/run` drop-in and rewrites the tunnel DNS within a second if any program replaces the file. Recover no longer gets stuck on "Resolver changed outside Wave": it keeps a newer file another program wrote, and Connect clears a leftover backup itself (B-22)
   - Lower idle CPU use: the window no longer redraws ten times a second; background events wake it immediately and a one-second tick drives timers and the uptime display (B-11)
   - Uninstalling closes open Wave VPN windows instead of leaving one that offers first-time setup; a window whose app was removed says so (B-09). The uninstall message and user guide say that preferences, including the Network Lock choice, are kept even by `apt purge` (B-13)
+
+[Release notes](docs/RELEASE-v0.1.4.md).
 
 ## 0.1.3 · 2026-11-05 · early release
 
