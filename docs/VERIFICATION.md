@@ -13,6 +13,16 @@ What has been tested on Wave VPN for Linux, what failed, and what's still open. 
 - EFI boot with the optional boot lock; keyring save and restore; Eddie 2.26.2 and 2.27.2 profile import
 - Installed-release GUI: wrong-account vs unreachable sign-in, Recover before sign-in
 
+**Development packages — 2026-11-09**
+
+Unsigned builds passed the exercised core paths on Ubuntu 24.04/26.04, Debian 13,
+Fedora 45, openSUSE Tumbleweed, Arch KDE and Mint 22.3. This includes GUI flows,
+PAM/keyring, available tray hosts, native packages, reboot, firewall coexistence
+and live DNS checks. The final Ubuntu AppArmor and Mint display fixes were
+verified at `3f531fe`; see [the final matrix](qa/DISTRO-MATRIX-FINAL.md) and
+[round-2 report](qa/RETEST-ROUND2.md) for exact coverage and exceptions. These
+are development-build results; release-binary and physical suspend gates remain.
+
 **Seen once, not reproduced**
 
 - A direct DNS query failed after switching to the second server in one ARM64 live run. The rerun passed in full; it's tracked in the release gates.

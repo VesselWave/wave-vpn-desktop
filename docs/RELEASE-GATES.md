@@ -13,6 +13,20 @@ What has to pass before Wave VPN for Linux can be called production-qualified. C
 - [x] Installed-release GUI: wrong-account vs unreachable sign-in, Recover before sign-in, keyring save and restore across restart
 - [x] Security inbox confirmed; signing fingerprint published on keys.openpgp.org and vpn.vwave.me
 
+## Current development-build coverage — 2026-11-09
+
+The [Ubuntu round](qa/DISTRO-UBUNTU-2404.md),
+[round-1 re-test](qa/DISTRO-UBUNTU-2404-RETEST.md),
+[round-2 re-test](qa/RETEST-ROUND2.md) and
+[final matrix](qa/DISTRO-MATRIX-FINAL.md) cover GUI connection flows, PAM/keyring,
+tray, install/upgrade/removal, reboot, firewall coexistence and live DNS switching
+on unsigned development packages. The final blocker recheck used `3f531fe`.
+The second-server DNS failure did not recur in 12 Ubuntu switches; the earlier
+ARM64 observation remains unexplained. These results do not qualify an unbuilt
+release binary or close physical suspend, missing-dependency/architecture cases,
+connection-check fault injection or latest-Eddie import gates. Keep the exact
+release-candidate checks below open until that candidate is tested.
+
 ## Still open
 
 - [ ] **GUI flows with the release binary:** sign-in, restore and sign-out; device selection; connect, cancel, switch, retry and stop; tray; desktop login (PAM). The last attempt didn't reach a final Connected state.

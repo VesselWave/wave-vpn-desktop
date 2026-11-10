@@ -87,3 +87,20 @@ Uninstalling first closes any open Wave VPN window, disconnects, turns off Netwo
 ## Scope
 
 WireGuard only. OpenVPN, obfuscation, Windows, macOS connections, and AirVPN account-side port forwarding and DDNS are out of scope. Advanced routing, forwarding, DNS and transport tuning are deliberately kept out of the UI; see [scope](PARITY.md).
+
+## Known limits from distribution testing
+
+With Network Lock off, NetworkManager can send its own connectivity check over
+the physical network, including plain HTTP on Mint. During a server switch, DNS
+can briefly use the normal network resolver. Turn on Network Lock to block
+traffic outside the tunnel, including these requests.
+
+When upgrading from the published 0.1.3 package, the old networking helper can
+keep running until reboot. Disconnect and reboot after upgrading to use the new
+helper. Later builds restart a replaced helper once idle.
+
+On Fedora and openSUSE, reactivating a wired connection with Network Lock on can
+make `nmcli con up` report an error; testing observed recovery within 2–40 seconds
+without affecting tunnel DNS. An install immediately after boot also stopped a
+VM's login screen twice; this has not reproduced in installs after boot completed.
+See [the distribution reports](qa/DISTRO-MATRIX-FINAL.md) for coverage and limits.
