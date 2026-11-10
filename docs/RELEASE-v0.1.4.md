@@ -16,8 +16,6 @@ Early release · Linux x86_64 (Intel / AMD, 64-bit) · systemd required. Develop
 >
 > Network Lock remains **off by default** on new installs. With it off, container DNS and NetworkManager connectivity checks can use the physical network, and DNS can briefly do so during switching. Enable Network Lock to block this traffic; containers and NAT virtual machines then have no network. See the [user guide](https://github.com/VesselWave/wave-vpn-desktop/blob/v0.1.4/docs/USER-GUIDE.md#known-limits-from-distribution-testing).
 
-Best server remains a latency/load heuristic; throughput and long-term reliability are unverified.
-
 **Upgrade the installed helper together with the app.** Disconnect and quit first, then install the updated package or rerun the tarball installer. Bootstrap exceptions are bounded public endpoints, not cryptographically verified provider addresses; see [Network Lock's trust boundary](https://github.com/VesselWave/wave-vpn-desktop/blob/v0.1.4/SECURITY.md).
 
 > [!IMPORTANT]
