@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Countries list: a load bar capped at 100% (it could show 157%), each country's best ping and the cities it serves, column headings, and the same selection highlight as the server list
+- The Servers footer names the selection under a "Selected" label
+
 ## 0.1.4 · 2026-11-09 · early release
 
 - When upgrading from published 0.1.3, disconnect, quit and reboot after installation to activate the new helper.

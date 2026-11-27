@@ -115,6 +115,54 @@ pub fn by_country_name<V>(groups: BTreeMap<&str, V>) -> Vec<(&str, V)> {
     groups.sort_by_cached_key(|(code, _)| (country(code), code.to_string()));
     groups
 }
+/// A 48px load bar with its percentage, coloured by how busy the server is.
+fn load_meter<'a>(load: f64) -> Element<'a, Message> {
+    let load = load.clamp(0., 100.);
+    let role = if load < 50. {
+        Ink::Success
+    } else if load < 80. {
+        Ink::Warning
+    } else {
+        Ink::Danger
+    };
+    let bar = container(row![
+        container(Space::new())
+            .width(48. * load as f32 / 100.)
+            .height(4)
+            .style(theme::meter(role)),
+        Space::new().width(48. * (100. - load) as f32 / 100.)
+    ])
+    .width(48)
+    .height(4)
+    .style(theme::meter(Ink::Faint));
+    row![bar, text(format!("{load:.0}%")).font(theme::MONO).size(13)]
+        .spacing(8)
+        .align_y(Alignment::Center)
+        .width(104)
+        .into()
+}
+fn ping_label<'a>(ping: Ping) -> Element<'a, Message> {
+    text(match ping {
+        Ping::Measured(n) => format!("{n} ms"),
+        Ping::Unreachable => "Timeout".into(),
+        Ping::Unknown => "—".into(),
+    })
+    .width(64)
+    .font(theme::MONO)
+    .size(13)
+    .style(move |t: &Theme| iced::widget::text::Style {
+        color: Some(theme::color(
+            t,
+            match ping {
+                Ping::Measured(n) if n < 60 => Ink::Success,
+                Ping::Measured(n) if n < 150 => Ink::Warning,
+                Ping::Measured(_) | Ping::Unreachable => Ink::Danger,
+                Ping::Unknown => Ink::Faint,
+            },
+        )),
+    })
+    .into()
+}
 pub fn shell(app: &Wave) -> Element<'_, Message> {
     let rail = app.width < 760.;
     let mut nav = column![].spacing(2);
@@ -642,36 +690,85 @@ fn servers(app: &Wave) -> Element<'_, Message> {
         }
     });
     let mut rows = column![].spacing(2);
-    let mut table_header = None;
+    let table_header;
     if app.server_view == ServerView::Countries {
         let mut groups: BTreeMap<&str, Vec<&Server>> = BTreeMap::new();
         for s in list {
             groups.entry(&s.country).or_default().push(s);
         }
+        let heading = |label: &'static str, width: Length| {
+            container(text(label).size(12).style(theme::muted))
+                .padding([6, 0])
+                .width(width)
+        };
+        table_header = Some(column![
+            container(
+                row![
+                    Space::new().width(36),
+                    heading("Country", Fill),
+                    heading("Avg. load", Length::Fixed(104.)),
+                    heading("Best ping", Length::Fixed(64.)),
+                ]
+                .spacing(12)
+            )
+            .padding(iced::Padding::default().left(14).right(26)),
+            line()
+        ]);
         for (code, servers) in by_country_name(groups) {
-            let load = servers.iter().map(|s| s.load()).sum::<f64>() / servers.len() as f64;
+            // A server's load can exceed 100% when bandwidth tops nominal capacity.
+            let load = servers
+                .iter()
+                .map(|s| s.load().clamp(0., 100.))
+                .sum::<f64>()
+                / servers.len() as f64;
+            let ping = servers
+                .iter()
+                .map(|s| app.latency.get(&s.name))
+                .min_by_key(|p| p.order())
+                .unwrap_or(Ping::Unknown);
+            let mut cities: Vec<&str> = servers.iter().map(|s| s.location.as_str()).collect();
+            cities.sort_unstable();
+            cities.dedup();
+            let mut detail = servers_label(servers.len());
+            if !narrow && !cities.is_empty() {
+                let shown = cities
+                    .iter()
+                    .take(3)
+                    .copied()
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                detail = match cities.len() {
+                    n if n > 3 => format!("{detail} · {shown} +{}", n - 3),
+                    _ => format!("{detail} · {shown}"),
+                };
+            }
+            let cells = row![
+                container(text(code.to_uppercase()).font(theme::MONO).size(12))
+                    .center_x(36)
+                    .padding([3, 0])
+                    .style(theme::badge),
+                column![
+                    text(country(code)).size(14).font(theme::MEDIUM),
+                    text(detail)
+                        .size(12)
+                        .style(theme::muted)
+                        .wrapping(iced::widget::text::Wrapping::None)
+                ]
+                .spacing(2)
+                .width(Fill),
+                load_meter(load),
+                ping_label(ping),
+            ]
+            .spacing(12)
+            .align_y(Alignment::Center);
             rows = rows.push(
-                button(
-                    row![
-                        text(code.to_uppercase()).font(theme::MONO).width(40),
-                        column![
-                            text(country(code)).size(14).font(theme::MEDIUM),
-                            text(servers_label(servers.len()))
-                                .size(12)
-                                .style(theme::muted)
-                        ]
-                        .width(Fill),
-                        text(format!("{load:.0}%")).font(theme::MONO).size(13)
-                    ]
-                    .spacing(12)
-                    .align_y(Alignment::Center),
-                )
-                .width(Fill)
-                .padding([14, 12])
-                .style(theme::selected(
-                    app.prefs.target == Target::Country(code.into()),
-                ))
-                .on_press(Message::Select(Target::Country(code.into()))),
+                button(cells)
+                    .width(Fill)
+                    .padding([9, 14])
+                    .style(theme::server_row(
+                        app.prefs.target == Target::Country(code.into()),
+                    ))
+                    .on_press(Message::Select(Target::Country(code.into()))),
             );
         }
     } else {
@@ -815,30 +912,7 @@ fn servers(app: &Wave) -> Element<'_, Message> {
                     .width(Fill),
                 );
             }
-            let load = s.load().clamp(0., 100.);
-            let role = if load < 50. {
-                Ink::Success
-            } else if load < 80. {
-                Ink::Warning
-            } else {
-                Ink::Danger
-            };
-            let bar = container(row![
-                container(Space::new())
-                    .width(48. * load as f32 / 100.)
-                    .height(4)
-                    .style(theme::meter(role)),
-                Space::new().width(48. * (100. - load) as f32 / 100.)
-            ])
-            .width(48)
-            .height(4)
-            .style(theme::meter(Ink::Faint));
-            cells = cells.push(
-                row![bar, text(format!("{load:.0}%")).font(theme::MONO).size(13)]
-                    .spacing(8)
-                    .align_y(Alignment::Center)
-                    .width(104),
-            );
+            cells = cells.push(load_meter(s.load()));
             if !narrow {
                 cells = cells.push(
                     text(s.users.to_string())
@@ -847,27 +921,7 @@ fn servers(app: &Wave) -> Element<'_, Message> {
                         .size(13),
                 );
             }
-            cells = cells.push(
-                text(match app.latency.get(&s.name) {
-                    Ping::Measured(n) => format!("{n} ms"),
-                    Ping::Unreachable => "Timeout".into(),
-                    Ping::Unknown => "—".into(),
-                })
-                .width(64)
-                .font(theme::MONO)
-                .style(move |t: &Theme| iced::widget::text::Style {
-                    color: Some(theme::color(
-                        t,
-                        match app.latency.get(&s.name) {
-                            Ping::Measured(n) if n < 60 => Ink::Success,
-                            Ping::Measured(n) if n < 150 => Ink::Warning,
-                            Ping::Measured(_) | Ping::Unreachable => Ink::Danger,
-                            Ping::Unknown => Ink::Faint,
-                        },
-                    )),
-                })
-                .size(13),
-            );
+            cells = cells.push(ping_label(app.latency.get(&s.name)));
             if !narrow {
                 cells = cells.push(
                     text(
@@ -932,9 +986,13 @@ fn servers(app: &Wave) -> Element<'_, Message> {
         table,
         line(),
         row![
-            text(target_label(&app.prefs.target))
-                .size(13)
-                .style(theme::muted),
+            column![
+                text("Selected").size(12).style(theme::faint),
+                text(target_label(&app.prefs.target))
+                    .size(14)
+                    .font(theme::MEDIUM),
+            ]
+            .spacing(2),
             Space::new().width(Fill),
             connect
         ]

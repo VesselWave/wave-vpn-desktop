@@ -148,6 +148,20 @@ pub fn chip(t: &Theme) -> container::Style {
         ..Default::default()
     }
 }
+/// A neutral rounded tag, such as a country code.
+pub fn badge(t: &Theme) -> container::Style {
+    let c = colors(t);
+    container::Style {
+        background: Some(c.surface.into()),
+        border: Border {
+            color: c.border,
+            width: 1.,
+            radius: RADIUS_SM.into(),
+        },
+        text_color: Some(c.muted),
+        ..Default::default()
+    }
+}
 pub fn status_chip(active: bool) -> impl Fn(&Theme) -> container::Style {
     move |t| {
         if active {

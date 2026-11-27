@@ -24,6 +24,12 @@ pub fn setup(app: &mut Wave) {
         ("Mirfak", "ca", "Toronto", 37, 88),
         ("Sirius", "us", "New York", 68, 95),
         ("Antares", "sg", "Singapore", 46, 170),
+        ("Pollux", "us", "Miami", 34, 118),
+        ("Achernar", "us", "Los Angeles", 79, 152),
+        ("Saiph", "ca", "Vancouver", 22, 141),
+        ("Wezen", "tw", "Taipei", 63, 262),
+        ("Talitha", "jp", "Tokyo", 91, 238),
+        ("Mintaka", "nl", "Amsterdam", 12, 21),
     ];
     m.servers.truncate(sample.len());
     for (s, (name, code, city, load, ping)) in m.servers.iter_mut().zip(sample) {
@@ -54,6 +60,11 @@ pub fn setup(app: &mut Wave) {
 /// Apply one named preview scene (`WAVE_PREVIEW_SCENE`).
 pub fn scene(app: &mut Wave, name: &str) {
     match name {
+        "countries" => {
+            app.tab = Tab::Servers;
+            app.server_view = ServerView::Countries;
+            app.prefs.target = Target::Country("us".into());
+        }
         "connected" => {
             app.active_server = app
                 .manifest
