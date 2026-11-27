@@ -63,7 +63,8 @@ pub fn scene(app: &mut Wave, name: &str) {
         "countries" => {
             app.tab = Tab::Servers;
             app.server_view = ServerView::Countries;
-            app.prefs.target = Target::Country("us".into());
+            app.prefs.target = Target::Server("Pollux".into());
+            app.expanded.insert("us".into());
         }
         "connected" => {
             app.active_server = app

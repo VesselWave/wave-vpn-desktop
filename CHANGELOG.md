@@ -3,7 +3,8 @@
 ## Unreleased
 
 - Countries list: a load bar capped at 100% (it could show 157%), each country's best ping and the cities it serves, column headings, and the same selection highlight as the server list
-- The Servers footer names the selection under a "Selected" label
+- Countries open to list their servers, best first, so you can pick a specific server in a country or "Best in <country>"; the list starts with Best server and opens the country holding your current choice
+- The Servers footer names the selection under a "Selected" label, with a server's city and country
 
 ## 0.1.4 · 2026-11-09 · early release
 

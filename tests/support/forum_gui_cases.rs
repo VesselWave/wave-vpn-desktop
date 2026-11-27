@@ -811,6 +811,24 @@ fn forum_u2404_b21_country_list_uses_names_plurals_and_name_order() {
     assert_eq!(names, ["Austria", "Canada", "Czechia", "Switzerland"]);
 }
 
+// Countries open to list their servers, "Best in <country>" first, and the
+// country holding the current choice opens on its own.
+#[test]
+fn countries_open_to_pick_a_server_and_show_the_current_choice() {
+    let mut app = app();
+    let server = app.manifest.as_ref().unwrap().servers[0].clone();
+    let _ = app.update(Message::Select(Target::Server(server.name.clone())));
+    let _ = app.update(Message::ServerView(ServerView::Countries));
+    assert!(app.expanded.contains(&server.country));
+    let _ = app.update(Message::ToggleCountry(server.country.clone()));
+    assert!(!app.expanded.contains(&server.country));
+    let _ = app.update(Message::ToggleCountry("zz".into()));
+    assert!(app.expanded.contains("zz"));
+    let _ = app.update(Message::Select(Target::Best));
+    let _ = app.update(Message::ServerView(ServerView::Countries));
+    assert_eq!(app.expanded.len(), 1);
+}
+
 // U2404 B-20: GNOME's Light style sets color-scheme 'default', which the
 // portal reports as "no preference"; Wave stayed dark instead of light.
 #[test]

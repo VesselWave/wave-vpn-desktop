@@ -98,6 +98,8 @@ enum Message {
     RestoreAccount,
     Refresh,
     ServerView(ServerView),
+    /// Open or close one country in the Countries list.
+    ToggleCountry(String),
     Sort(Sort),
     Filter(Level),
     Clear,
@@ -272,6 +274,8 @@ struct Wave {
     sort: Sort,
     ascending: bool,
     search: String,
+    /// Countries opened in the Countries list.
+    expanded: BTreeSet<String>,
     prefs: Preferences,
     draft: Options,
     latency: LatencyCache,
@@ -379,6 +383,7 @@ impl Wave {
             sort: Sort::Score,
             ascending: true,
             search: String::new(),
+            expanded: BTreeSet::new(),
             prefs,
             draft,
             latency: LatencyCache::default(),
@@ -1129,7 +1134,28 @@ impl Wave {
                 self.section = section;
             }
             Message::Search(value) => self.search = value,
-            Message::ServerView(value) => self.server_view = value,
+            Message::ServerView(value) => {
+                self.server_view = value;
+                if value == ServerView::Countries {
+                    // Open the country holding the current choice so it stays visible.
+                    let code = match &self.prefs.target {
+                        Target::Country(code) => Some(code.clone()),
+                        Target::Server(name) => self.manifest.as_ref().and_then(|m| {
+                            m.servers
+                                .iter()
+                                .find(|s| &s.name == name)
+                                .map(|s| s.country.clone())
+                        }),
+                        Target::Best => None,
+                    };
+                    self.expanded.extend(code);
+                }
+            }
+            Message::ToggleCountry(code) => {
+                if !self.expanded.remove(&code) {
+                    self.expanded.insert(code);
+                }
+            }
             Message::Sort(value) => {
                 if value == self.sort {
                     self.ascending = !self.ascending;

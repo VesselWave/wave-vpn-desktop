@@ -148,6 +148,19 @@ pub fn chip(t: &Theme) -> container::Style {
         ..Default::default()
     }
 }
+/// An opened country: a quiet card around its servers.
+pub fn group(t: &Theme) -> container::Style {
+    let c = colors(t);
+    container::Style {
+        background: Some(c.surface.into()),
+        border: Border {
+            color: c.border,
+            width: 1.,
+            radius: RADIUS_SM.into(),
+        },
+        ..Default::default()
+    }
+}
 /// A neutral rounded tag, such as a country code.
 pub fn badge(t: &Theme) -> container::Style {
     let c = colors(t);

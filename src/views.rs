@@ -47,6 +47,19 @@ pub fn target_label(t: &Target) -> String {
         Target::Server(n) => n.clone(),
     }
 }
+/// Where the selection connects: a server's city, or how a best pick is made.
+fn target_detail(app: &Wave) -> String {
+    match &app.prefs.target {
+        Target::Best => "Any country".into(),
+        Target::Country(_) => "Best server here".into(),
+        Target::Server(name) => app
+            .manifest
+            .as_ref()
+            .and_then(|m| m.servers.iter().find(|s| &s.name == name))
+            .map(|s| format!("{}, {}", s.location, country(&s.country)))
+            .unwrap_or_default(),
+    }
+}
 pub fn country(c: &str) -> String {
     match c.to_lowercase().as_str() {
         "nl" => "Netherlands",
@@ -599,7 +612,7 @@ fn amount(mut n: f64, app: &Wave, rate: bool) -> String {
 fn uptime(s: u64) -> String {
     format!("{:02}:{:02}:{:02}", s / 3600, (s / 60) % 60, s % 60)
 }
-fn servers(app: &Wave) -> Element<'_, Message> {
+fn servers<'a>(app: &'a Wave) -> Element<'a, Message> {
     let mut switches = row![].spacing(2);
     for (v, label) in [
         (ServerView::All, "All"),
@@ -706,15 +719,55 @@ fn servers(app: &Wave) -> Element<'_, Message> {
                 row![
                     Space::new().width(36),
                     heading("Country", Fill),
-                    heading("Avg. load", Length::Fixed(104.)),
-                    heading("Best ping", Length::Fixed(64.)),
+                    heading("Load", Length::Fixed(104.)),
+                    heading("Ping", Length::Fixed(64.)),
+                    Space::new().width(16),
                 ]
                 .spacing(12)
             )
             .padding(iced::Padding::default().left(14).right(26)),
             line()
         ]);
-        for (code, servers) in by_country_name(groups) {
+        // Rows share one grid: a 36px lead, the label, load, ping and a 16px chevron slot.
+        let grid = |lead: Element<'a, Message>,
+                    label: Element<'a, Message>,
+                    load: Element<'a, Message>,
+                    ping: Element<'a, Message>,
+                    tail: Element<'a, Message>| {
+            row![
+                container(lead).center_x(36),
+                container(label).width(Fill),
+                load,
+                ping,
+                container(tail).width(16)
+            ]
+            .spacing(12)
+            .align_y(Alignment::Center)
+        };
+        let blank = || -> Element<'a, Message> { Space::new().into() };
+        if q.is_empty() {
+            rows = rows.push(
+                button(grid(
+                    icon(Icon::Zap, 16., Ink::Accent),
+                    column![
+                        text("Best server").size(14).font(theme::MEDIUM),
+                        text("Fastest available server in any country")
+                            .size(12)
+                            .style(theme::muted)
+                    ]
+                    .spacing(2)
+                    .into(),
+                    Space::new().width(104).into(),
+                    Space::new().width(64).into(),
+                    blank(),
+                ))
+                .width(Fill)
+                .padding([9, 14])
+                .style(theme::server_row(app.prefs.target == Target::Best))
+                .on_press(Message::Select(Target::Best)),
+            );
+        }
+        for (code, mut servers) in by_country_name(groups) {
             // A server's load can exceed 100% when bandwidth tops nominal capacity.
             let load = servers
                 .iter()
@@ -742,11 +795,19 @@ fn servers(app: &Wave) -> Element<'_, Message> {
                     _ => format!("{detail} · {shown}"),
                 };
             }
-            let cells = row![
+            // Searching opens every matching country so matching servers show.
+            let open = !q.is_empty() || app.expanded.contains(code);
+            let country_target = Target::Country(code.into());
+            let inside = app.prefs.target == country_target
+                || servers
+                    .iter()
+                    .any(|s| app.prefs.target == Target::Server(s.name.clone()));
+            let head = button(grid(
                 container(text(code.to_uppercase()).font(theme::MONO).size(12))
                     .center_x(36)
                     .padding([3, 0])
-                    .style(theme::badge),
+                    .style(theme::badge)
+                    .into(),
                 column![
                     text(country(code)).size(14).font(theme::MEDIUM),
                     text(detail)
@@ -755,20 +816,102 @@ fn servers(app: &Wave) -> Element<'_, Message> {
                         .wrapping(iced::widget::text::Wrapping::None)
                 ]
                 .spacing(2)
-                .width(Fill),
+                .into(),
                 load_meter(load),
                 ping_label(ping),
-            ]
-            .spacing(12)
-            .align_y(Alignment::Center);
-            rows = rows.push(
-                button(cells)
-                    .width(Fill)
-                    .padding([9, 14])
-                    .style(theme::server_row(
-                        app.prefs.target == Target::Country(code.into()),
+                icon(
+                    if open {
+                        Icon::ChevronDown
+                    } else {
+                        Icon::ChevronRight
+                    },
+                    16.,
+                    Ink::Muted,
+                ),
+            ))
+            .width(Fill)
+            .padding([9, 14])
+            // While closed, the outline shows the selection lives inside.
+            .style(theme::server_row(inside && !open))
+            .on_press(Message::ToggleCountry(code.to_string()));
+            if !open {
+                rows = rows.push(head);
+                continue;
+            }
+            servers.sort_by_key(|s| (app.server_score(s).unwrap_or(u32::MAX), s.name.clone()));
+            let mut children = column![button(grid(
+                icon(Icon::Zap, 14., Ink::Accent),
+                text(format!("Best in {}", country(code)))
+                    .size(13)
+                    .font(theme::MEDIUM)
+                    .into(),
+                text("Automatic")
+                    .size(12)
+                    .style(theme::muted)
+                    .width(104)
+                    .into(),
+                Space::new().width(64).into(),
+                blank(),
+            ))
+            .width(Fill)
+            .padding([7, 10])
+            .style(theme::server_row(app.prefs.target == country_target))
+            .on_press(Message::Select(country_target.clone())),]
+            .spacing(2);
+            for s in servers {
+                let favorite = app.prefs.favorites.contains(&s.name);
+                let star = button(icon(
+                    if favorite {
+                        Icon::StarFilled
+                    } else {
+                        Icon::Star
+                    },
+                    14.,
+                    if favorite { Ink::Warning } else { Ink::Faint },
+                ))
+                .padding(0)
+                .style(|_, _| button::Style::default())
+                .on_press(Message::Favorite(s.name.clone()));
+                let label: Element<_> = if narrow {
+                    text(&s.name).size(13).font(theme::MEDIUM).into()
+                } else {
+                    row![
+                        text(&s.name)
+                            .size(13)
+                            .font(theme::MEDIUM)
+                            .wrapping(iced::widget::text::Wrapping::None),
+                        text(&s.location)
+                            .size(12)
+                            .style(theme::muted)
+                            .wrapping(iced::widget::text::Wrapping::None)
+                    ]
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .into()
+                };
+                let target = Target::Server(s.name.clone());
+                children = children.push(
+                    button(grid(
+                        star.into(),
+                        label,
+                        load_meter(s.load()),
+                        ping_label(app.latency.get(&s.name)),
+                        blank(),
                     ))
-                    .on_press(Message::Select(Target::Country(code.into()))),
+                    .width(Fill)
+                    .padding([7, 10])
+                    .style(theme::server_row(app.prefs.target == target))
+                    .on_press_maybe(s.available().then_some(Message::Select(target))),
+                );
+            }
+            rows = rows.push(
+                container(column![
+                    head,
+                    // Inset 4px so outlines clear the card; 10px row padding keeps the grid.
+                    container(children).padding([0, 4])
+                ])
+                .padding(iced::Padding::default().bottom(4))
+                .style(theme::group),
             );
         }
     } else {
@@ -988,9 +1131,14 @@ fn servers(app: &Wave) -> Element<'_, Message> {
         row![
             column![
                 text("Selected").size(12).style(theme::faint),
-                text(target_label(&app.prefs.target))
-                    .size(14)
-                    .font(theme::MEDIUM),
+                row![
+                    text(target_label(&app.prefs.target))
+                        .size(14)
+                        .font(theme::MEDIUM),
+                    text(target_detail(app)).size(13).style(theme::muted),
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center),
             ]
             .spacing(2),
             Space::new().width(Fill),
